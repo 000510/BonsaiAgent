@@ -1,0 +1,149 @@
+package com.example.bonsaiagent.ui
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.example.bonsaiagent.MainViewModel
+import com.example.bonsaiagent.data.AgentSettings
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
+    val s = vm.settings.value
+    val scroll = rememberScrollState()
+
+    Column(
+        Modifier.fillMaxSize().padding(16.dp).verticalScroll(scroll),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("模型", style = MaterialTheme.typography.titleMedium)
+        Text(vm.modelPath.value ?: "未导入模型", style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onPickModel) { Text("导入本地模型 (.gguf)") }
+            OutlinedButton(onClick = vm::loadModel) { Text("加载模型") }
+        }
+        Text(
+            vm.status.value,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (vm.modelLoaded.value) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.error
+        )
+
+        Divider(Modifier.padding(vertical = 8.dp))
+        Text("推理参数", style = MaterialTheme.typography.titleMedium)
+
+        SliderRow("最大输出长度: ${s.maxTokens}", s.maxTokens.toFloat(), 256f, 4096f, 64f) {
+            vm.updateSettings(s.copy(maxTokens = it.toInt()))
+        }
+        SliderRow("温度 Temperature: %.2f".format(s.temperature), s.temperature, 0f, 2f, 0.05f) {
+            vm.updateSettings(s.copy(temperature = it))
+        }
+        SliderRow("Top-K: ${s.topK}", s.topK.toFloat(), 0f, 100f, 1f) {
+            vm.updateSettings(s.copy(topK = it.toInt()))
+        }
+        SliderRow("Top-P: %.2f".format(s.topP), s.topP, 0f, 1f, 0.01f) {
+            vm.updateSettings(s.copy(topP = it))
+        }
+        SliderRow("重复惩罚: %.2f".format(s.repeatPenalty), s.repeatPenalty, 1f, 1.5f, 0.01f) {
+            vm.updateSettings(s.copy(repeatPenalty = it))
+        }
+        SliderRow("上下文窗口: ${s.contextSize}", s.contextSize.toFloat(), 1024f, 16384f, 512f) {
+            vm.updateSettings(s.copy(contextSize = it.toInt()))
+        }
+        SliderRow("推理线程数: ${s.threads}", s.threads.toFloat(), 1f, 12f, 1f) {
+            vm.updateSettings(s.copy(threads = it.toInt()))
+        }
+
+        Divider(Modifier.padding(vertical = 8.dp))
+        Text("系统提示词", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = s.systemPrompt,
+            onValueChange = { vm.updateSettings(s.copy(systemPrompt = it)) },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
+            maxLines = 8
+        )
+
+        Divider(Modifier.padding(vertical = 8.dp))
+        Text("下载源（用于参考/记录）", style = MaterialTheme.typography.titleMedium)
+        SourceDropdown(
+            current = s.downloadSource,
+            onSelect = { vm.updateSettings(s.copy(downloadSource = it)) }
+        )
+
+        Divider(Modifier.padding(vertical = 8.dp))
+        Text("云端 API（DeepSeek）", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = s.deepseekKey,
+            onValueChange = { vm.updateSettings(s.copy(deepseekKey = it)) },
+            label = { Text("API Key") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+        OutlinedTextField(
+            value = s.apiBase,
+            onValueChange = { vm.updateSettings(s.copy(apiBase = it)) },
+            label = { Text("接口地址") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        Divider(Modifier.padding(vertical = 8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("开启本机 HTTP API（类似 Ollama）", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f))
+            Switch(checked = s.apiEnabled, onCheckedChange = {
+                vm.updateSettings(s.copy(apiEnabled = it))
+            })
+        }
+        Text("开启后监听 127.0.0.1:11434，提供 POST /api/generate，仅本进程内可访问。",
+            style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun SliderRow(
+    label: String,
+    value: Float,
+    min: Float,
+    max: Float,
+    step: Float,
+    onChanged: (Float) -> Unit
+) {
+    var v by remember(value) { mutableStateOf(value) }
+    Column(Modifier.fillMaxWidth()) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Slider(
+            value = v,
+            onValueChange = { v = it; onChanged(it) },
+            valueRange = min..max,
+            steps = if (step > 0) ((max - min) / step).toInt() - 1 else 0
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SourceDropdown(current: String, onSelect: (String) -> Unit) {
+    val options = listOf("HF镜像", "官方", "ModelScope")
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+        OutlinedTextField(
+            value = current,
+            onValueChange = {},
+            readOnly = true,
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach {
+                DropdownMenuItem(text = { Text(it) }, onClick = {
+                    onSelect(it); expanded = false
+                })
+            }
+        }
+    }
+}

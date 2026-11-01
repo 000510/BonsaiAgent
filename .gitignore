@@ -1,0 +1,13 @@
+# 编译产物
+/build
+/app/build
+/.gradle
+*.apk
+
+# 第三方源码（CI 里会自动 clone，不进仓库）
+app/src/main/cpp/llamacpp/
+
+# 本地配置
+local.properties
+.idea/
+*.iml

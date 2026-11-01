@@ -1,0 +1,66 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.example.bonsaiagent'
+    compileSdk 34
+    ndkVersion "25.2.9519653"   // 与 CI 里 sdkmanager 安装的 NDK 版本保持一致
+
+    defaultConfig {
+        applicationId "com.example.bonsaiagent"
+        minSdk 26            // Android 8.0，覆盖绝大多数现役手机
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        // 只编 arm64（手机主流，体积也小）
+        ndk { abiFilters 'arm64-v8a' }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17 -O2"
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+
+    buildFeatures { compose true }
+    composeOptions { kotlinCompilerExtensionVersion '1.5.14' }
+
+    // 把 .so 打进 APK
+    packagingOptions {
+        jniLibs { useLegacyPackaging true }
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.4'
+    implementation 'androidx.activity:activity-compose:1.9.2'
+
+    implementation 'androidx.compose.ui:ui:1.6.8'
+    implementation 'androidx.compose.material3:material3:1.2.1'
+    implementation 'androidx.compose.material:material-icons-extended:1.6.8'
+    implementation 'androidx.compose.ui:ui-text-google-fonts:1.6.8'
+
+    implementation 'androidx.navigation:navigation-compose:2.7.7'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4'
+
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'   // 用于调用 DeepSeek 云端
+}
