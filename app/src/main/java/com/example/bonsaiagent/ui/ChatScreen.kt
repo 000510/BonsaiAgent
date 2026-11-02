@@ -47,7 +47,7 @@ fun ChatScreen(vm: MainViewModel) {
 }
 
 @Composable
-private fun Bubble(msg: ChatMessage) {
+fun Bubble(msg: ChatMessage) {
     val isUser = msg.role == "user"
     Row(
         Modifier.fillMaxWidth(),

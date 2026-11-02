@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.bonsaiagent.agent.CloudClient
 import com.example.bonsaiagent.agent.Executor
 import com.example.bonsaiagent.agent.Router
+import com.example.bonsaiagent.agent.RouteResult
 import com.example.bonsaiagent.api.LocalApiServer
 import com.example.bonsaiagent.data.AgentSettings
 import com.example.bonsaiagent.data.SettingsStore
@@ -102,12 +103,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             // 解析路由指令
             when (val route = Router.parse(ai.content.value)) {
-                is Router.Cloud -> {
+                is RouteResult.Cloud -> {
                     ai.content.value += "\n\n[→ 已路由云端] ${route.description}\n"
                     val cloud = CloudClient.chat(s.apiBase, s.deepseekKey, route.description)
                     ai.content.value += cloud
                 }
-                is Router.Exec -> {
+                is RouteResult.Exec -> {
                     ai.content.value += "\n\n[→ 执行命令] ${route.command}\n"
                     ai.content.value += Executor.run(route.command)
                 }
