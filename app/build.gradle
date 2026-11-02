@@ -20,6 +20,7 @@ android {
 
         externalNativeBuild {
             cmake {
+                version "3.22.1"
                 cppFlags "-std=c++17 -O2"
                 arguments "-DANDROID_STL=c++_shared"
             }
