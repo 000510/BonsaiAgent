@@ -87,18 +87,18 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     env->ReleaseStringUTFChars(jpath, path);
 
     // --- 加载前先自检：文件是否存在、大小是否正常 ---
-    struct stat st{};
-    if (::stat(spath.c_str(), &st) != 0) {
+    struct stat fst{};
+    if (::stat(spath.c_str(), &fst) != 0) {
         g_lastError = "文件不存在或无法访问: " + spath;
         return fail(env, "加载模型");
     }
-    if (st.st_size < 1024 * 1024) {
+    if (fst.st_size < 1024 * 1024) {
         char buf[256];
-        snprintf(buf, sizeof(buf), "文件太小(%lld 字节)，可能没复制完整", (long long) st.st_size);
+        snprintf(buf, sizeof(buf), "文件太小(%lld 字节)，可能没复制完整", (long long) fst.st_size);
         g_lastError = buf;
         return fail(env, "加载模型");
     }
-    LOGI("准备加载: %s (%lld 字节)", spath.c_str(), (long long) st.st_size);
+    LOGI("准备加载: %s (%lld 字节)", spath.c_str(), (long long) fst.st_size);
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = n_gpu_layers;   // 手机无 GPU 走 CPU，传 0
@@ -235,18 +235,35 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     int n_vocab = llama_vocab_n_tokens(vocab);
 
     // tokenize（新版第一参数为 vocab）
-    int n_tok = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
-                               nullptr, 0, true, true);
-    if (n_tok <= 0) return env->NewStringUTF("[tokenize 失败]");
-    if (n_tok < 0) n_tok = -n_tok;   // 返回负值表示所需容量
-    std::vector<llama_token> tokens(n_tok);
-    int got = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
-                             tokens.data(), n_tok, true, true);
-    if (got <= 0) return env->NewStringUTF("[tokenize 失败]");
-    tokens.resize(got);
-    n_tok = got;
+    // 第一次传入空缓冲，函数返回所需容量；容量不足时返回负值
+    int need = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
+                              nullptr, 0, true, true);
+    if (need == 0) return env->NewStringUTF("[tokenize 失败: prompt 为空]");
+    if (need < 0) need = -need;      // 负数表示所需容量
+    need += 8;                        // 留点余量
 
-    llama_batch batch = llama_batch_init(1024, 0, 1);
+    std::vector<llama_token> tokens(need);
+    int got = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
+                             tokens.data(), need, true, true);
+    if (got <= 0) {
+        g_lastError = "tokenize 返回 " + std::to_string(got);
+        return env->NewStringUTF("[tokenize 失败]");
+    }
+    tokens.resize(got);
+    int n_tok = got;
+
+    // 不能超过上下文窗口，否则 decode 必失败
+    int n_ctx_limit = (int) llama_n_ctx(st->ctx);
+    if (n_tok > n_ctx_limit - 8) {
+        n_tok = n_ctx_limit - 8;
+        if (n_tok <= 0) return env->NewStringUTF("[上下文太小]");
+        tokens.resize(n_tok);
+        LOGI("prompt 过长，截断到 %d tokens", n_tok);
+    }
+
+    // batch 容量必须 >= prompt token 数，否则手动填充会越界
+    int batch_cap = n_tok > 1024 ? n_tok : 1024;
+    llama_batch batch = llama_batch_init(batch_cap, 0, 1);
     llama_seq_id seq0 = 0;   // 单序列 id = 0
 
     // prefill：prism 分支已无 llama_batch_add 辅助函数，手动填充 batch
