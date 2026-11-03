@@ -22,7 +22,11 @@ object Llama {
     }
 
     private external fun init(modelPath: String, nThreads: Int, nCtx: Int, nGpuLayers: Int): Long
+    private external fun lastError(): String
     private external fun setCallback(cb: Callback)
+
+    /** 最近一次原生错误详情（加载失败时给界面显示真实原因） */
+    fun getLastError(): String = try { lastError() } catch (e: Throwable) { "" }
     private external fun generate(handle: Long, prompt: String, temp: Float, topK: Int,
                                   topP: Float, repPen: Float, maxTokens: Int): String
     private external fun freeNative(handle: Long)

@@ -61,7 +61,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val ok = Llama.load(path, settings.value.threads, settings.value.contextSize)
             withContext(Dispatchers.Main) {
                 modelLoaded.value = ok
-                status.value = if (ok) "模型就绪 ✅" else "模型加载失败，请确认是 prism 分支支持的格式"
+                status.value = if (ok) "模型就绪 ✅" else {
+                    val err = Llama.getLastError()
+                    "模型加载失败" + if (err.isNotBlank()) "：\n${err.trim()}" else "，请确认是 prism 分支支持的格式"
+                }
             }
         }
     }
@@ -75,7 +78,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ai = ChatMessage("assistant")
         chatMessages.add(user); chatMessages.add(ai)
         val s = settings.value
-        val prompt = "你是一个有帮助的本地助手，请用简洁中文回答。\n\n用户: $msg\n助手:"
+        // ChatML 格式：Qwen2.5 / Qwen3(即 Ternary-Bonsai) 必须这么套，否则输出会乱
+        val prompt = buildString {
+            append("<|im_start|>system\n")
+            append("你是一个运行在手机上的本地助手，请用简洁、准确的中文回答。<|im_end|>\n")
+            append("<|im_start|>user\n").append(msg).append("<|im_end|>\n")
+            append("<|im_start|>assistant\n")
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val buf = StringBuilder()
             Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
@@ -94,7 +103,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ai = ChatMessage("assistant")
         agentMessages.add(user); agentMessages.add(ai)
         val s = settings.value
-        val prompt = "${s.systemPrompt}\n\n用户: $msg\n助手:"
+        // ChatML 格式（Qwen 系用）
+        val prompt = buildString {
+            append("<|im_start|>system\n").append(s.systemPrompt).append("<|im_end|>\n")
+            append("<|im_start|>user\n").append(msg).append("<|im_end|>\n")
+            append("<|im_start|>assistant\n")
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val raw = StringBuilder()
             Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
