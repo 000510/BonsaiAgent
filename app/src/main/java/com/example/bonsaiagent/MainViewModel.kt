@@ -13,6 +13,7 @@ import com.example.bonsaiagent.agent.RouteResult
 import com.example.bonsaiagent.api.LocalApiServer
 import com.example.bonsaiagent.data.AgentSettings
 import com.example.bonsaiagent.data.SettingsStore
+import com.example.bonsaiagent.llm.GgufTypeFixer
 import com.example.bonsaiagent.llm.Llama
 import com.example.bonsaiagent.llm.ModelLoader
 import kotlinx.coroutines.Dispatchers
@@ -58,10 +59,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             status.value = "正在加载模型…"
+            // 先修一下 GGUF 里的旧版类型标签（42/41 → 142/141），省得重下 2GB
+            val fixed = try {
+                GgufTypeFixer.fixIfNeeded(path)
+            } catch (e: Throwable) {
+                null
+            }
+            if (fixed != null) status.value = fixed + "，正在加载…"
             val ok = Llama.load(path, settings.value.threads, settings.value.contextSize)
             withContext(Dispatchers.Main) {
                 modelLoaded.value = ok
-                status.value = if (ok) "模型就绪 ✅" else {
+                status.value = if (ok) {
+                    if (fixed != null) "模型就绪 ✅（$fixed）" else "模型就绪 ✅"
+                } else {
                     val err = Llama.getLastError()
                     "模型加载失败" + if (err.isNotBlank()) "：\n${err.trim()}" else "，请确认是 prism 分支支持的格式"
                 }
