@@ -11,7 +11,7 @@ project("bonsai_llm")
 # 把下面 target_link_libraries 里的名字改成 fork 实际产出的库名即可。
 # ============================================================================
 
-set(LLAMA_DIR ${CMAKE_SOURCE_DIR}/llamacpp)
+set(LLAMA_DIR ${CMAKE_SOURCE_DIR}/src/main/cpp/llamacpp)
 
 # 只编 llama.cpp 核心库（libllama / libggml），关掉示例/测试/服务端，避免缺依赖报错
 set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
