@@ -44,17 +44,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 原生层崩过 / 上次运行到哪一步，这里能直接看到
         val crashFile = java.io.File(app.filesDir, "last_crash.txt")
         val logFile = java.io.File(app.filesDir, "run_log.txt")
+        val errFile = java.io.File(app.filesDir, "native_stderr.txt")
         val crash = if (crashFile.exists()) {
             val t = try { crashFile.readText().trim() } catch (e: Throwable) { "" }
             crashFile.delete()
             t
         } else ""
         val log = if (logFile.exists()) {
-            try { logFile.readLines().takeLast(14).joinToString("\n") } catch (e: Throwable) { "" }
+            try { logFile.readLines().takeLast(12).joinToString("\n") } catch (e: Throwable) { "" }
         } else ""
+        val nerr = if (errFile.exists()) {
+            try { errFile.readLines().takeLast(12).joinToString("\n").trim() } catch (e: Throwable) { "" }
+        } else ""
+        val tail = buildString {
+            if (log.isNotEmpty()) append("\n\n日志：\n").append(log)
+            if (nerr.isNotEmpty()) append("\n\n底层输出：\n").append(nerr)
+        }
         when {
-            crash.isNotEmpty() -> status.value = "上次原生崩溃：\n$crash\n\n崩溃前的日志：\n$log"
-            log.isNotEmpty()   -> status.value = "上次运行日志：\n$log"
+            crash.isNotEmpty() -> status.value = "上次原生崩溃：\n$crash$tail"
+            tail.isNotEmpty()  -> status.value = "上次运行记录：$tail"
         }
     }
 
@@ -118,12 +126,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             val buf = StringBuilder()
-            Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
-                buf.append(it)
-                val txt = buf.toString()
-                // Compose 的状态必须回主线程改，后台线程直接改会崩
-                mainHandler.post { ai.content.value = txt }
-            }
+            // 推理要用大栈线程：llama.cpp 的计算在调用线程栈上跑，默认 1MB 容易溢出
+            val worker = Thread(null, Runnable {
+                Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
+                    buf.append(it)
+                    val txt = buf.toString()
+                    mainHandler.post { ai.content.value = txt }
+                }
+            }, "llama-gen", 32L * 1024 * 1024)
+            worker.start()
+            worker.join()
         }
     }
 
@@ -144,11 +156,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             val raw = StringBuilder()
-            Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
-                raw.append(it)
-                val txt = raw.toString()
-                mainHandler.post { ai.content.value = txt }
-            }
+            val worker = Thread(null, Runnable {
+                Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
+                    raw.append(it)
+                    val txt = raw.toString()
+                    mainHandler.post { ai.content.value = txt }
+                }
+            }, "llama-gen", 32L * 1024 * 1024)
+            worker.start()
+            worker.join()
             // 解析路由指令
             when (val route = Router.parse(ai.content.value)) {
                 is RouteResult.Cloud -> {

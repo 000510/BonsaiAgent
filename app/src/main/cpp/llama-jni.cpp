@@ -35,6 +35,9 @@
 static char g_logFile[512]   = {0};
 static char g_crashFile[512] = {0};
 static char g_stage[64]      = "idle";
+static char g_stageBuf[128]  = "stage=idle\n";
+// 备用信号栈：栈溢出导致的 SIGSEGV 用默认栈根本跑不起来 handler
+static char g_altStack[64 * 1024] __attribute__((aligned(16)));
 
 static void log_line(const char* fmt, ...) {
     char buf[768];
@@ -75,22 +78,42 @@ static long mem_available_mb() {
 
 static void set_stage(const char* s) {
     snprintf(g_stage, sizeof(g_stage), "%s", s);
+    // 提前格式化，信号处理里只做 write，避免崩溃时死在 snprintf
+    snprintf(g_stageBuf, sizeof(g_stageBuf), "stage=%s\n", s);
+}
+
+static const char* sig_name(int sig) {
+    switch (sig) {
+        case SIGSEGV: return "SIGSEGV ";
+        case SIGABRT: return "SIGABRT ";
+        case SIGFPE:  return "SIGFPE ";
+        case SIGILL:  return "SIGILL ";
+        case SIGBUS:  return "SIGBUS ";
+        default:      return "SIG? ";
+    }
 }
 
 static void crash_handler(int sig) {
+    // 只做 open/write/close，全部用预格式化好的缓冲
+    const char* name = sig_name(sig);
+    size_t nl = strlen(name), sl = strlen(g_stageBuf);
     if (g_crashFile[0]) {
-        char buf[256];
-        int n = snprintf(buf, sizeof(buf),
-                         "NATIVE CRASH: signal=%d(%s) stage=%s\n",
-                         sig,
-                         sig == SIGSEGV ? "SIGSEGV" : sig == SIGABRT ? "SIGABRT" :
-                         sig == SIGFPE  ? "SIGFPE"  : sig == SIGILL  ? "SIGILL"  :
-                         sig == SIGBUS  ? "SIGBUS"  : "SIG?",
-                         g_stage);
         int fd = ::open(g_crashFile, O_WRONLY | O_CREAT | O_APPEND, 0600);
         if (fd >= 0) {
-            ssize_t ig = ::write(fd, buf, (size_t) n);
-            (void) ig;
+            ssize_t ig;
+            ig = ::write(fd, "NATIVE CRASH: ", 14); (void) ig;
+            ig = ::write(fd, name, nl);             (void) ig;
+            ig = ::write(fd, g_stageBuf, sl);       (void) ig;
+            ::close(fd);
+        }
+    }
+    if (g_logFile[0]) {
+        int fd = ::open(g_logFile, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (fd >= 0) {
+            ssize_t ig;
+            ig = ::write(fd, "!!! ", 4);       (void) ig;
+            ig = ::write(fd, name, nl);        (void) ig;
+            ig = ::write(fd, g_stageBuf, sl);  (void) ig;
             ::close(fd);
         }
     }
@@ -99,9 +122,15 @@ static void crash_handler(int sig) {
 }
 
 static void install_crash_handlers() {
+    stack_t ss{};
+    ss.ss_sp    = g_altStack;
+    ss.ss_size  = sizeof(g_altStack);
+    ss.ss_flags = 0;
+    ::sigaltstack(&ss, nullptr);
+
     struct sigaction sa{};
     sa.sa_handler = crash_handler;
-    sa.sa_flags = SA_RESTART;
+    sa.sa_flags = SA_ONSTACK | SA_RESTART;
     sigemptyset(&sa.sa_mask);
     int sigs[5] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS};
     for (int i = 0; i < 5; i++) {
@@ -118,6 +147,15 @@ static bool files_dir_from_model(const std::string& modelPath, std::string& out)
     if (p2 == std::string::npos) return false;
     out = modelPath.substr(0, p2);
     return !out.empty();
+}
+
+// 把 C 层 stderr 也接到文件里：ggml 的 "fatal error" 大多走 fprintf(stderr)
+static void redirect_stderr(const std::string& path) {
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) {
+        ::dup2(fd, STDERR_FILENO);
+        if (fd != STDERR_FILENO) ::close(fd);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -177,11 +215,13 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     if (files_dir_from_model(spath, dir)) {
         std::string lf = dir + "/run_log.txt";
         std::string cf = dir + "/last_crash.txt";
+        std::string ef = dir + "/native_stderr.txt";
         if (lf.size() < sizeof(g_logFile))   snprintf(g_logFile,   sizeof(g_logFile),   "%s", lf.c_str());
         if (cf.size() < sizeof(g_crashFile)) snprintf(g_crashFile, sizeof(g_crashFile), "%s", cf.c_str());
         // 每次加载开一份新日志
         int fd = ::open(g_logFile, O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd >= 0) ::close(fd);
+        redirect_stderr(ef);
     }
 
     log_line("===== 开始加载 =====");
@@ -334,7 +374,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
 
     // ---- prefill：分块提交，单批不超 32 ----
     set_stage("prefill");
-    const int kChunk = 32;
+    const int kChunk = 8;    // 分小块提交，定位崩溃点更细
     int cap = std::max(kChunk, 8);
     llama_batch batch = llama_batch_init(cap, 0, 1);
     llama_seq_id seq0 = 0;
@@ -352,15 +392,19 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         bool last = (off + cnt == n_tok);
         batch.logits[cnt - 1] = last ? 1 : 0;
 
-        log_line("prefill 块 %d..%d", off, off + cnt - 1);
+        char stage[64];
+        snprintf(stage, sizeof(stage), "prefill %d..%d", off, off + cnt - 1);
+        set_stage(stage);
+        log_line("%s 开始", stage);
         if (llama_decode(st->ctx, batch) != 0) {
             llama_batch_free(batch);
             llama_sampler_free(smpl);
             g_lastError = "prefill 失败：" + g_lastError;
-            log_line("[失败] prefill 快 %d", off);
+            log_line("[失败] %s", stage);
             set_stage("idle");
             return env->NewStringUTF("[prefill 失败]");
         }
+        log_line("%s 完成", stage);
     }
     log_line("prefill 完成，可用内存 %ld MB", mem_available_mb());
 
