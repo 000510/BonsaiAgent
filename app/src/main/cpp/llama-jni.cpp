@@ -3,16 +3,12 @@
 // JNI 桥：Kotlin 侧通过它调用 PrismML fork (branch: prism) 的 llama.cpp C API。
 //
 // 改动记录：
-//   v1.2  补 llama_backend_init()、日志回调透传真实错误、ChatML 提示词
-//   v1.5  自动修正 GGUF 旧类型标签（Kotlin 侧 GgufTypeFixer）
-//   v1.6  【修复点发送后闪退】
-//         1) 原自写采样器每个 token 要分配 4 个 ~15 万元素的数组（≈3.6MB），
-//            prefill 一结束就分配，内存吃紧直接被系统杀 —— 改用官方 sampler 链；
-//         2) llama_get_logits_ith(ctx, i) 的 i 是「输出序号」不是 batch 位置，
-//            原来传 batch.n_tokens-1 取不到 logits —— 改用 llama_sampler_sample(smpl, ctx, -1)；
-//         3) n_batch / n_ubatch 512 → 256，n_ctx 默认降到 2048，降低峰值内存；
-//         4) max_tokens 按剩余上下文裁剪，防止 pos 越界触发 GGML_ASSERT；
-//         5) 加原生崩溃捕获，把信号号 + 最后执行到的阶段写进文件，界面可直接看。
+//   v1.6  改用官方 sampler 链、sampler_sample(-1)、UI 回主线程
+//   v1.7  【继续追闪退】
+//         1) 全过程分步日志落盘（files/run_log.txt），崩在哪一步、当时剩多少内存都有记录；
+//         2) n_ctx 上限压到 2048（4096 时 KV cache 就要 600MB），n_batch 128 / n_ubatch 64；
+//         3) prefill 改成分块提交，降低单次 decode 的峰值内存；
+//         4) decode 前查 /proc/meminfo，内存不够就直接返回提示而不是硬跑被系统杀。
 // ============================================================================
 #include <jni.h>
 #include <string>
@@ -34,10 +30,48 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 // ---------------------------------------------------------------------------
-// 崩溃现场记录
+// 日志文件 & 崩溃现场
 // ---------------------------------------------------------------------------
+static char g_logFile[512]   = {0};
 static char g_crashFile[512] = {0};
-static char g_stage[64] = "idle";
+static char g_stage[64]      = "idle";
+
+static void log_line(const char* fmt, ...) {
+    char buf[768];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    if (n > (int) sizeof(buf) - 2) n = (int) sizeof(buf) - 2;
+    buf[n++] = '\n';
+    buf[n] = '\0';
+    __android_log_print(ANDROID_LOG_INFO, TAG, "%s", buf);
+    if (!g_logFile[0]) return;
+    int fd = ::open(g_logFile, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd >= 0) {
+        ssize_t ignored = ::write(fd, buf, (size_t) n);
+        (void) ignored;
+        ::close(fd);
+    }
+}
+
+// /proc/meminfo 的 MemAvailable（MB）
+static long mem_available_mb() {
+    FILE* f = fopen("/proc/meminfo", "r");
+    if (!f) return -1;
+    char line[256];
+    long kb = -1;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "MemAvailable:", 13) == 0) {
+            long v = 0;
+            if (sscanf(line + 13, "%ld", &v) == 1) kb = v;
+            break;
+        }
+    }
+    fclose(f);
+    return kb < 0 ? -1 : kb / 1024;
+}
 
 static void set_stage(const char* s) {
     snprintf(g_stage, sizeof(g_stage), "%s", s);
@@ -55,8 +89,8 @@ static void crash_handler(int sig) {
                          g_stage);
         int fd = ::open(g_crashFile, O_WRONLY | O_CREAT | O_APPEND, 0600);
         if (fd >= 0) {
-            ssize_t ignored = ::write(fd, buf, (size_t) n);
-            (void) ignored;
+            ssize_t ig = ::write(fd, buf, (size_t) n);
+            (void) ig;
             ::close(fd);
         }
     }
@@ -69,43 +103,37 @@ static void install_crash_handlers() {
     sa.sa_handler = crash_handler;
     sa.sa_flags = SA_RESTART;
     sigemptyset(&sa.sa_mask);
-    for (int sig : {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS}) {
+    int sigs[5] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS};
+    for (int i = 0; i < 5; i++) {
         struct sigaction old{};
-        ::sigaction(sig, &sa, &old);
+        ::sigaction(sigs[i], &sa, &old);
     }
 }
 
-// 从模型路径推出崩溃日志位置：.../files/models/xxx.gguf -> .../files/last_crash.txt
-static void set_crash_file_from_model(const std::string& modelPath) {
+// .../files/models/xxx.gguf -> .../files/
+static bool files_dir_from_model(const std::string& modelPath, std::string& out) {
     size_t p1 = modelPath.rfind('/');
-    if (p1 == std::string::npos || p1 == 0) return;
+    if (p1 == std::string::npos || p1 == 0) return false;
     size_t p2 = modelPath.rfind('/', p1 - 1);
-    if (p2 == std::string::npos) return;
-    std::string dir = modelPath.substr(0, p2);
-    std::string f = dir + "/last_crash.txt";
-    if (f.size() < sizeof(g_crashFile)) {
-        snprintf(g_crashFile, sizeof(g_crashFile), "%s", f.c_str());
-        LOGI("崩溃日志将写入 %s", g_crashFile);
-    }
+    if (p2 == std::string::npos) return false;
+    out = modelPath.substr(0, p2);
+    return !out.empty();
 }
 
 // ---------------------------------------------------------------------------
-// 捕获 llama.cpp / ggml 的日志，交给 Kotlin 显示
+// llama.cpp 日志
 // ---------------------------------------------------------------------------
 static std::string g_lastError;
 static const size_t kMaxErrLen = 2000;
 
 static void ggml_log_cb(enum ggml_log_level level, const char * text, void * /*user_data*/) {
     if (!text) return;
-    __android_log_print(level == GGML_LOG_LEVEL_ERROR ? ANDROID_LOG_ERROR :
-                        level == GGML_LOG_LEVEL_WARN  ? ANDROID_LOG_WARN  :
-                                                        ANDROID_LOG_INFO,
-                        "llama.cpp", "%s", text);
     if (level == GGML_LOG_LEVEL_ERROR) {
         g_lastError += text;
         if (g_lastError.size() > kMaxErrLen) {
             g_lastError = g_lastError.substr(g_lastError.size() - kMaxErrLen);
         }
+        log_line("[llama] %s", text);
     }
 }
 
@@ -114,7 +142,6 @@ struct LlamaState {
     llama_context* ctx;
 };
 
-// ---- 流式回调 ----
 static JavaVM*   g_vm       = nullptr;
 static jobject   g_cbObj    = nullptr;
 static jmethodID g_cbMethod = nullptr;
@@ -124,13 +151,12 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     install_crash_handlers();
     llama_backend_init();
     llama_log_set(ggml_log_cb, nullptr);
-    LOGI("llama_backend_init 完成");
     return JNI_VERSION_1_6;
 }
 
-static jlong fail(JNIEnv* /*env*/, const char* stage) {
+static jlong fail(const char* stage) {
     std::string msg = g_lastError.empty() ? std::string("未知错误") : g_lastError;
-    LOGE("%s 失败: %s", stage, msg.c_str());
+    log_line("[失败] %s: %s", stage, msg.c_str());
     return 0;
 }
 
@@ -146,20 +172,34 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     const char* path = env->GetStringUTFChars(jpath, nullptr);
     std::string spath(path ? path : "");
     env->ReleaseStringUTFChars(jpath, path);
-    set_crash_file_from_model(spath);
+
+    std::string dir;
+    if (files_dir_from_model(spath, dir)) {
+        std::string lf = dir + "/run_log.txt";
+        std::string cf = dir + "/last_crash.txt";
+        if (lf.size() < sizeof(g_logFile))   snprintf(g_logFile,   sizeof(g_logFile),   "%s", lf.c_str());
+        if (cf.size() < sizeof(g_crashFile)) snprintf(g_crashFile, sizeof(g_crashFile), "%s", cf.c_str());
+        // 每次加载开一份新日志
+        int fd = ::open(g_logFile, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd >= 0) ::close(fd);
+    }
+
+    log_line("===== 开始加载 =====");
+    log_line("可用内存 %ld MB", mem_available_mb());
+    log_line("路径 %s", spath.c_str());
 
     struct stat fst{};
     if (::stat(spath.c_str(), &fst) != 0) {
         g_lastError = "文件不存在或无法访问: " + spath;
-        return fail(env, "加载模型");
+        return fail("加载模型");
     }
+    log_line("文件大小 %.2f GB", (double) fst.st_size / (1024.0 * 1024.0 * 1024.0));
     if (fst.st_size < 1024 * 1024) {
         char buf[256];
         snprintf(buf, sizeof(buf), "文件太小(%lld 字节)，可能没复制完整", (long long) fst.st_size);
         g_lastError = buf;
-        return fail(env, "加载模型");
+        return fail("加载模型");
     }
-    LOGI("准备加载: %s (%lld 字节)", spath.c_str(), (long long) fst.st_size);
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = n_gpu_layers;
@@ -167,18 +207,17 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     llama_model* model = llama_model_load_from_file(spath.c_str(), mparams);
     if (!model) {
         if (g_lastError.empty()) g_lastError = "llama.cpp 未能加载该文件（格式不支持或内存不足）";
-        return fail(env, "加载模型");
+        return fail("加载模型");
     }
-    LOGI("模型加载成功");
+    log_line("模型加载完成，可用内存 %ld MB", mem_available_mb());
 
     llama_context_params cparams = llama_context_default_params();
-    // 手机上上下文别开太大：4096 时 KV cache 已占 ~600MB
     uint32_t want_ctx = n_ctx > 0 ? (uint32_t) n_ctx : 2048u;
-    if (want_ctx > 4096u) want_ctx = 4096u;
+    if (want_ctx > 2048u) want_ctx = 2048u;   // 4096 时 KV cache 约 600MB，手机扛不住
     if (want_ctx < 512u)  want_ctx = 512u;
     cparams.n_ctx           = want_ctx;
-    cparams.n_batch         = 256;      // 峰值内存和 prefill 速度的平衡点
-    cparams.n_ubatch        = 256;
+    cparams.n_batch         = 128;
+    cparams.n_ubatch        = 64;
     cparams.n_threads       = (uint32_t) (n_threads > 0 ? n_threads : 4);
     cparams.n_threads_batch = cparams.n_threads;
     cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
@@ -187,12 +226,13 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     if (!ctx) {
         llama_model_free(model);
         if (g_lastError.empty()) g_lastError = "上下文创建失败（内存不足，试试把上下文长度调小）";
-        return fail(env, "创建上下文");
+        return fail("创建上下文");
     }
 
     auto* st = new LlamaState{model, ctx};
-    LOGI("模型已加载, n_ctx=%u n_batch=%u threads=%u",
-         cparams.n_ctx, cparams.n_batch, cparams.n_threads);
+    log_line("上下文就绪 n_ctx=%u n_batch=%u n_ubatch=%u threads=%u，可用内存 %ld MB",
+             cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, cparams.n_threads,
+             mem_available_mb());
     set_stage("idle");
     return reinterpret_cast<jlong>(st);
 }
@@ -227,6 +267,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
 
     g_lastError.clear();
     set_stage("tokenize");
+    log_line("----- generate 开始，可用内存 %ld MB -----", mem_available_mb());
 
     const char* cprompt = env->GetStringUTFChars(jprompt, nullptr);
     std::string prompt(cprompt ? cprompt : "");
@@ -252,22 +293,29 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         return env->NewStringUTF("[tokenize 失败]");
     }
     tokens.resize((size_t) n_tok);
+    log_line("prompt %d tokens", n_tok);
 
     const int n_ctx = (int) llama_n_ctx(st->ctx);
     int room = n_ctx - 8;
-    if (n_tok > room) {              // prompt 本身过长，截断
+    if (n_tok > room) {
         n_tok = room;
         if (n_tok <= 0) return env->NewStringUTF("[上下文太小]");
         tokens.resize((size_t) n_tok);
     }
 
-    // 预算：不超过剩余窗口，默认 2048
     int budget = max_tokens > 0 ? max_tokens : 2048;
     int left = n_ctx - n_tok - 1;
     if (budget > left) budget = left;
     if (budget <= 0) return env->NewStringUTF("[上下文不够，先清空对话或调大上下文]");
 
-    // ---- 官方采样器链：penalties → top-k → top-p → temp → dist ----
+    long mem = mem_available_mb();
+    if (mem > 0 && mem < 600) {
+        log_line("[放弃] 可用内存只有 %ld MB", mem);
+        g_lastError = "可用内存不足(" + std::to_string(mem) + " MB)，先关掉别的应用再试";
+        return env->NewStringUTF("[内存不足]");
+    }
+
+    // ---- 采样器 ----
     set_stage("sampler");
     llama_sampler* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
     if (!smpl) {
@@ -284,38 +332,48 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     if (temp > 0.0001f) llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
-    // ---- prefill ----
+    // ---- prefill：分块提交，单批不超 32 ----
     set_stage("prefill");
-    int cap = std::max(n_tok, 8);
+    const int kChunk = 32;
+    int cap = std::max(kChunk, 8);
     llama_batch batch = llama_batch_init(cap, 0, 1);
     llama_seq_id seq0 = 0;
 
-    batch.n_tokens = n_tok;
-    for (int i = 0; i < n_tok; i++) {
-        batch.token[i]    = tokens[(size_t) i];
-        batch.pos[i]      = i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i]   = &seq0;
-        batch.logits[i]   = 0;
-    }
-    batch.logits[n_tok - 1] = 1;
+    for (int off = 0; off < n_tok; off += kChunk) {
+        int cnt = std::min(kChunk, n_tok - off);
+        batch.n_tokens = cnt;
+        for (int i = 0; i < cnt; i++) {
+            batch.token[i]    = tokens[(size_t) (off + i)];
+            batch.pos[i]      = off + i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i]   = &seq0;
+            batch.logits[i]   = 0;
+        }
+        bool last = (off + cnt == n_tok);
+        batch.logits[cnt - 1] = last ? 1 : 0;
 
-    if (llama_decode(st->ctx, batch) != 0) {
-        llama_batch_free(batch);
-        llama_sampler_free(smpl);
-        g_lastError = "prefill 失败：" + g_lastError;
-        set_stage("idle");
-        return env->NewStringUTF("[prefill 失败]");
+        log_line("prefill 块 %d..%d", off, off + cnt - 1);
+        if (llama_decode(st->ctx, batch) != 0) {
+            llama_batch_free(batch);
+            llama_sampler_free(smpl);
+            g_lastError = "prefill 失败：" + g_lastError;
+            log_line("[失败] prefill 快 %d", off);
+            set_stage("idle");
+            return env->NewStringUTF("[prefill 失败]");
+        }
     }
+    log_line("prefill 完成，可用内存 %ld MB", mem_available_mb());
 
-    // ---- 逐 token 生成 ----
+    // ---- 生成 ----
     set_stage("generate");
     std::string full;
     int n_past = n_tok;
     char buf[512];
 
     for (int i = 0; i < budget; i++) {
-        // idx = -1 表示「最后一个输出」，与 logits 输出序号的语义一致
+        if (i % 8 == 0) {
+            log_line("生成中… 第 %d 个 token，可用内存 %ld MB", i, mem_available_mb());
+        }
         llama_token next = llama_sampler_sample(smpl, st->ctx, -1);
         if (next < 0) break;
         if (llama_vocab_is_eog(vocab, next)) break;
@@ -339,16 +397,18 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
 
         if (llama_decode(st->ctx, batch) != 0) {
             g_lastError = "decode 失败：" + g_lastError;
+            log_line("[失败] decode 第 %d 个 token", i);
             break;
         }
         n_past++;
-        if (n_past >= n_ctx - 1) break;   // 窗口到底了，别越界
+        if (n_past >= n_ctx - 1) break;
     }
 
     llama_batch_free(batch);
     llama_sampler_free(smpl);
     set_stage("idle");
-    LOGI("生成结束，共 %zu 字节，%d tokens", full.size(), n_past - n_tok);
+    log_line("生成结束：%zu 字节 / %d tokens，可用内存 %ld MB",
+             full.size(), n_past - n_tok, mem_available_mb());
     return env->NewStringUTF(full.c_str());
 }
 
@@ -359,5 +419,5 @@ Java_com_example_bonsaiagent_llm_Llama_freeNative(JNIEnv*, jobject, jlong handle
     if (st->ctx)   llama_free(st->ctx);
     if (st->model) llama_model_free(st->model);
     delete st;
-    LOGI("已释放模型");
+    log_line("已释放模型");
 }

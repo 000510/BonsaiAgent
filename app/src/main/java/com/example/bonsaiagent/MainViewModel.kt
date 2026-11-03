@@ -41,14 +41,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val agentMessages = mutableStateListOf<ChatMessage>()
 
     init {
-        // 原生层崩过的话，这里能看到崩在哪个阶段
+        // 原生层崩过 / 上次运行到哪一步，这里能直接看到
         val crashFile = java.io.File(app.filesDir, "last_crash.txt")
-        if (crashFile.exists()) {
-            val txt = try { crashFile.readText().trim() } catch (e: Throwable) { "" }
-            if (txt.isNotEmpty()) {
-                status.value = "上次异常退出：\n" + txt.takeLast(600)
-            }
+        val logFile = java.io.File(app.filesDir, "run_log.txt")
+        val crash = if (crashFile.exists()) {
+            val t = try { crashFile.readText().trim() } catch (e: Throwable) { "" }
             crashFile.delete()
+            t
+        } else ""
+        val log = if (logFile.exists()) {
+            try { logFile.readLines().takeLast(14).joinToString("\n") } catch (e: Throwable) { "" }
+        } else ""
+        when {
+            crash.isNotEmpty() -> status.value = "上次原生崩溃：\n$crash\n\n崩溃前的日志：\n$log"
+            log.isNotEmpty()   -> status.value = "上次运行日志：\n$log"
         }
     }
 
