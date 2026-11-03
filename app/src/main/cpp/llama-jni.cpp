@@ -143,22 +143,31 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     std::string prompt(cprompt);
     env->ReleaseStringUTFChars(jprompt, cprompt);
 
-    int n_vocab = llama_n_vocab(st->model);
+    // prism 分支：vocab 已从 model 拆成独立类型，相关函数第一参数改为 vocab
+    const struct llama_vocab * vocab = llama_model_get_vocab(st->model);
+    int n_vocab = llama_vocab_n_tokens(vocab);
 
-    // 【API 适配点】tokenize：现代 API 以 model 为第一参数
-    int n_tok = llama_tokenize(st->model, prompt.c_str(), (int)prompt.size(),
+    // tokenize（新版第一参数为 vocab）
+    int n_tok = llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
                                nullptr, 0, true, true);
     if (n_tok <= 0) return env->NewStringUTF("[tokenize 失败]");
     std::vector<llama_token> tokens(n_tok);
-    llama_tokenize(st->model, prompt.c_str(), (int)prompt.size(),
+    llama_tokenize(vocab, prompt.c_str(), (int)prompt.size(),
                    tokens.data(), n_tok, true, true);
 
     llama_batch batch = llama_batch_init(1024, 0, 1);
+    llama_seq_id seq0 = 0;   // 单序列 id = 0
 
-    // prefill
-    batch.n_tokens = 0;
-    for (int i = 0; i < n_tok; i++)
-        llama_batch_add(batch, tokens[i], i, {0}, false);
+    // prefill：prism 分支已无 llama_batch_add 辅助函数，手动填充 batch
+    batch.n_tokens = n_tok;
+    for (int i = 0; i < n_tok; i++) {
+        batch.token[i]    = tokens[i];
+        batch.pos[i]      = i;
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i]   = &seq0;
+        batch.logits[i]   = 0;
+    }
+    batch.logits[n_tok - 1] = 1;   // 仅最后一个 token 输出 logits
     if (llama_decode(st->ctx, batch) != 0) {
         llama_batch_free(batch);
         return env->NewStringUTF("[prefill 失败]");
@@ -167,17 +176,16 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     std::string full;
     std::vector<llama_token> gen;
     int n_past = n_tok;
-    llama_token prev = tokens.back();
 
     for (int i = 0; i < max_tokens; i++) {
-        // 【API 适配点】取最后一个位置的 logits
+        // 取最后一个位置的 logits
         float* logits = llama_get_logits_ith(st->ctx, batch.n_tokens - 1);
         llama_token next = sample_token(logits, n_vocab, temp, top_k, top_p, rep_pen, gen);
-        if (next == llama_token_eos(st->model)) break;
+        if (next == llama_vocab_eos(vocab)) break;
 
         // piece -> 字符串
         char buf[512];
-        int len = llama_token_to_piece(st->ctx, next, buf, sizeof(buf), 0, true);
+        int len = llama_token_to_piece(vocab, next, buf, sizeof(buf), 0, true);
         if (len > 0) {
             std::string piece(buf, len);
             full += piece;
@@ -190,12 +198,15 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             }
         }
 
-        // 把新 token 喂回去
-        batch.n_tokens = 0;
-        llama_batch_add(batch, next, n_past, {0}, true);
+        // 把新 token 喂回去（继续手动填充 batch）
+        batch.n_tokens   = 1;
+        batch.token[0]    = next;
+        batch.pos[0]      = n_past;
+        batch.n_seq_id[0] = 1;
+        batch.seq_id[0]   = &seq0;
+        batch.logits[0]   = 1;
         if (llama_decode(st->ctx, batch) != 0) break;
         n_past++;
-        prev = next;
     }
 
     llama_batch_free(batch);
