@@ -2,6 +2,8 @@ package com.example.bonsaiagent
 
 import android.app.Application
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
@@ -29,6 +31,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = SettingsStore(app)
     private var apiServer: LocalApiServer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     val settings = mutableStateOf(store.load())
     val modelPath = mutableStateOf(ModelLoader.currentModelPath(app))
@@ -36,6 +39,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val status = mutableStateOf("欢迎使用 BonsaiAgent")
     val chatMessages = mutableStateListOf<ChatMessage>()
     val agentMessages = mutableStateListOf<ChatMessage>()
+
+    init {
+        // 原生层崩过的话，这里能看到崩在哪个阶段
+        val crashFile = java.io.File(app.filesDir, "last_crash.txt")
+        if (crashFile.exists()) {
+            val txt = try { crashFile.readText().trim() } catch (e: Throwable) { "" }
+            if (txt.isNotEmpty()) {
+                status.value = "上次异常退出：\n" + txt.takeLast(600)
+            }
+            crashFile.delete()
+        }
+    }
 
     /** 从系统选择器导入 .gguf 并加载 */
     fun importModel(uri: Uri) {
@@ -99,7 +114,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val buf = StringBuilder()
             Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
                 buf.append(it)
-                ai.content.value = buf.toString()
+                val txt = buf.toString()
+                // Compose 的状态必须回主线程改，后台线程直接改会崩
+                mainHandler.post { ai.content.value = txt }
             }
         }
     }
@@ -123,18 +140,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val raw = StringBuilder()
             Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
                 raw.append(it)
-                ai.content.value = raw.toString()
+                val txt = raw.toString()
+                mainHandler.post { ai.content.value = txt }
             }
             // 解析路由指令
             when (val route = Router.parse(ai.content.value)) {
                 is RouteResult.Cloud -> {
-                    ai.content.value += "\n\n[→ 已路由云端] ${route.description}\n"
+                    mainHandler.post { ai.content.value += "\n\n[→ 已路由云端] ${route.description}\n" }
                     val cloud = CloudClient.chat(s.apiBase, s.deepseekKey, route.description)
-                    ai.content.value += cloud
+                    mainHandler.post { ai.content.value += cloud }
                 }
                 is RouteResult.Exec -> {
-                    ai.content.value += "\n\n[→ 执行命令] ${route.command}\n"
-                    ai.content.value += Executor.run(route.command)
+                    mainHandler.post { ai.content.value += "\n\n[→ 执行命令] ${route.command}\n" }
+                    val out = Executor.run(route.command)
+                    mainHandler.post { ai.content.value += out }
                 }
                 else -> { /* 直接回答，无需路由 */ }
             }
