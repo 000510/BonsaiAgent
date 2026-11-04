@@ -19,6 +19,15 @@ set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 
+# ↓↓↓ 排查安卓端 llama_decode 静默崩溃时加的降级开关（放在 add_subdirectory 之前才生效）↓↓↓
+# 关掉 OpenMP：避免 omp 运行时在某些 SoC 上初始化即崩
+set(GGML_OPENMP           OFF CACHE BOOL "" FORCE)
+# 关掉按本机 CPU 自动挑指令集：避免选到 SoC 不支持的 NEON/i8mm 变体
+set(GGML_NATIVE           OFF CACHE BOOL "" FORCE)
+# 只保留一个通用 kernel，禁止按 CPU 特性动态生成多套 vec_dot 实现
+set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
+# ↑↑↑ 排查用，若无效可整段删掉 ↑↑↑
+
 # 编译 llama.cpp 核心（fork 自带 CMakeLists，会产出 llama / ggml 等 target）
 add_subdirectory(${LLAMA_DIR} llamacpp_build)
 
