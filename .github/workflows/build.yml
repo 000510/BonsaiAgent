@@ -45,3 +45,59 @@ jobs:
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
+  # ==========================================================================
+  # 对比实验：同一份源码，分别用 prism 分支和主线各编一个 x86 版 llama-cli，
+  # 跑同一个标准模型。用来判断"llama_decode 静默崩溃"到底是
+  #   ①PrismML prism 分支自己的问题，还是 ②换环境/换模型都能复现的普遍问题。
+  # ==========================================================================
+  verify-decode:
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [prism, master]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 克隆 llama.cpp（${{ matrix.branch }} 分支）
+        run: |
+          git clone --branch ${{ matrix.branch }} --depth 1 https://github.com/PrismML-Eng/llama.cpp llamacpp
+          cd llamacpp
+          git submodule update --init --recursive || true
+
+      - name: 编译 llama-cli（x86，关掉激进指令集）
+        run: |
+          cd llamacpp
+          cmake -B build \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF
+          cmake --build build --target llama-cli -j4
+          ls -lh build/bin/
+
+      - name: 下载测试模型（Qwen2.5-0.5B Q4_K_M）
+        run: |
+          curl -sL --max-time 600 -o /tmp/q.gguf \
+            "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf" \
+            || curl -sL --max-time 600 -o /tmp/q.gguf \
+            "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+          ls -lh /tmp/q.gguf
+          head -c 4 /tmp/q.gguf | xxd
+
+      - name: 跑推理（关键：看能不能出字）
+        run: |
+          cd llamacpp
+          echo "========== 参数 =========="
+          ./build/bin/llama-cli --version || true
+          echo "========== 开始推理 =========="
+          set +e
+          timeout 300 ./build/bin/llama-cli \
+            -m /tmp/q.gguf \
+            -p "你好" \
+            -n 32 \
+            -t 2 \
+            -no-cnv \
+            --no-warmup 2>&1 | tail -80
+          echo "========== 退出码: $? =========="
+          echo "如果上面有中文输出，说明这个分支的 decode 在 x86 上是好的"
