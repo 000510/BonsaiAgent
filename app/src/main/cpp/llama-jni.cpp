@@ -372,39 +372,23 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     if (temp > 0.0001f) llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
-    // ---- prefill：分块提交，单批不超 32 ----
+    // ---- prefill：改用官方 llama_batch_get_one 一次性提交，不再手工填字段 ----
     set_stage("prefill");
-    const int kChunk = 8;    // 分小块提交，定位崩溃点更细
-    int cap = std::max(kChunk, 8);
-    llama_batch batch = llama_batch_init(cap, 0, 1);
-    llama_seq_id seq0 = 0;
-
-    for (int off = 0; off < n_tok; off += kChunk) {
-        int cnt = std::min(kChunk, n_tok - off);
-        batch.n_tokens = cnt;
-        for (int i = 0; i < cnt; i++) {
-            batch.token[i]    = tokens[(size_t) (off + i)];
-            batch.pos[i]      = off + i;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id[i]   = &seq0;
-            batch.logits[i]   = 0;
-        }
-        bool last = (off + cnt == n_tok);
-        batch.logits[cnt - 1] = last ? 1 : 0;
-
-        char stage[64];
-        snprintf(stage, sizeof(stage), "prefill %d..%d", off, off + cnt - 1);
-        set_stage(stage);
-        log_line("%s 开始", stage);
-        if (llama_decode(st->ctx, batch) != 0) {
-            llama_batch_free(batch);
+    log_line("prefill 开始，n_tok=%d", n_tok);
+    {
+        int use_tok = n_tok;
+        if (use_tok > 128) use_tok = 128;
+        llama_batch pb = llama_batch_get_one(tokens.data(), use_tok);
+        log_line("prefill 提交 %d token，准备 llama_decode", use_tok);
+        int rc = llama_decode(st->ctx, pb);
+        log_line("prefill decode 返回 %d", rc);
+        if (rc != 0) {
             llama_sampler_free(smpl);
-            g_lastError = "prefill 失败：" + g_lastError;
-            log_line("[失败] %s", stage);
+            g_lastError = "prefill 失败，ret=" + std::to_string(rc);
+            log_line("[失败] prefill ret=%d", rc);
             set_stage("idle");
             return env->NewStringUTF("[prefill 失败]");
         }
-        log_line("%s 完成", stage);
     }
     log_line("prefill 完成，可用内存 %ld MB", mem_available_mb());
 
@@ -432,15 +416,9 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             }
         }
 
-        batch.n_tokens    = 1;
-        batch.token[0]    = next;
-        batch.pos[0]      = n_past;
-        batch.n_seq_id[0] = 1;
-        batch.seq_id[0]   = &seq0;
-        batch.logits[0]   = 1;
-
-        if (llama_decode(st->ctx, batch) != 0) {
-            g_lastError = "decode 失败：" + g_lastError;
+        llama_batch tb = llama_batch_get_one(&next, 1);
+        if (llama_decode(st->ctx, tb) != 0) {
+            g_lastError = "decode 失败";
             log_line("[失败] decode 第 %d 个 token", i);
             break;
         }
@@ -448,7 +426,6 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         if (n_past >= n_ctx - 1) break;
     }
 
-    llama_batch_free(batch);
     llama_sampler_free(smpl);
     set_stage("idle");
     log_line("生成结束：%zu 字节 / %d tokens，可用内存 %ld MB",
