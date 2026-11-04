@@ -24,10 +24,9 @@ set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP           OFF CACHE BOOL "" FORCE)
 # 关掉按本机 CPU 自动挑指令集：避免选到 SoC 不支持的 NEON/i8mm 变体
 set(GGML_NATIVE           OFF CACHE BOOL "" FORCE)
-# 只保留一个通用 kernel，禁止按 CPU 特性动态生成多套 vec_dot 实现
-set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
 # 强制最保守的 ARMv8.0 基线：不启用 dotprod / i8mm / fp16 等扩展。
 # 这些扩展在部分 SoC 上缺失，运行到对应指令会直接 SIGILL（进程无声消失）。
+# 注意：GGML_CPU_ARM_ARCH 与 GGML_CPU_ALL_VARIANTS 互斥，所以不再设后者。
 set(GGML_CPU_ARM_ARCH "armv8-a" CACHE STRING "" FORCE)
 # ↑↑↑ 排查用，若无效可整段删掉 ↑↑↑
 
