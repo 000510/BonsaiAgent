@@ -19,9 +19,11 @@
 #include <cstring>
 #include <cstdarg>
 #include <csignal>
+#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <android/log.h>
 #include "llama.h"
 
@@ -415,6 +417,34 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         if (use_tok > 128) use_tok = 128;
         llama_batch pb = llama_batch_get_one(tokens.data(), use_tok);
         log_line("prefill 提交 %d token，准备 llama_decode", use_tok);
+
+        // v1.15 诊断：fork 一个子进程去跑 decode。
+        // 子进程无论被什么信号杀死、或正常退出，父进程 waitpid 都能拿到确切的退出状态，
+        // 彻底绕开"信号处理器不触发、日志写不出来"的死结。
+        log_line("diag: fork 子进程执行 decode");
+        pid_t cpid = fork();
+        if (cpid == 0) {
+            // 子进程：只跑 native，不碰 JNI/ART
+            int r = llama_decode(st->ctx, pb);
+            _exit(r == 0 ? 0 : 1);
+        } else if (cpid > 0) {
+            int st = 0;
+            waitpid(cpid, &st, 0);
+            if (WIFSIGNALED(st)) {
+                int sig = WTERMSIG(st);
+                log_line("!!! decode 子进程被信号 %d 杀死 (%s)", sig, sig_name(sig));
+                g_lastError = "decode 被信号 " + std::to_string(sig) + " 终止";
+            } else if (WIFEXITED(st)) {
+                log_line("!!! decode 子进程正常退出，退出码 %d", WEXITSTATUS(st));
+                g_lastError = "decode 退出码 " + std::to_string(WEXITSTATUS(st));
+            }
+            llama_sampler_free(smpl);
+            set_stage("idle");
+            return env->NewStringUTF("[诊断完成：请查看上一次运行记录]");
+        } else {
+            log_line("!!! fork 失败: errno=%d", errno);
+        }
+
         int rc = llama_decode(st->ctx, pb);
         log_line("prefill decode 返回 %d", rc);
         if (rc != 0) {
