@@ -26,6 +26,9 @@ set(GGML_OPENMP           OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE           OFF CACHE BOOL "" FORCE)
 # 只保留一个通用 kernel，禁止按 CPU 特性动态生成多套 vec_dot 实现
 set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
+# 强制最保守的 ARMv8.0 基线：不启用 dotprod / i8mm / fp16 等扩展。
+# 这些扩展在部分 SoC 上缺失，运行到对应指令会直接 SIGILL（进程无声消失）。
+set(GGML_CPU_ARM_ARCH "armv8-a" CACHE STRING "" FORCE)
 # ↑↑↑ 排查用，若无效可整段删掉 ↑↑↑
 
 # 编译 llama.cpp 核心（fork 自带 CMakeLists，会产出 llama / ggml 等 target）

@@ -25,7 +25,7 @@ jobs:
         run: |
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" "ndk;25.2.9519653" "cmake;3.22.1"
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" "ndk;26.3.11579264" "cmake;3.22.1"
 
       - name: 克隆 PrismML llama.cpp（prism 分支，仅编译时需要）
         run: |

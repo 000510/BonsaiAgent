@@ -6,14 +6,14 @@ plugins {
 android {
     namespace 'com.example.bonsaiagent'
     compileSdk 34
-    ndkVersion "25.2.9519653"   // 与 CI 里 sdkmanager 安装的 NDK 版本保持一致
+    ndkVersion "26.3.11579264"   // 与 CI 里 sdkmanager 安装的 NDK 版本保持一致
 
     defaultConfig {
         applicationId "com.example.bonsaiagent"
         minSdk 26            // Android 8.0，覆盖绝大多数现役手机
         targetSdk 34
-        versionCode 11
-        versionName "1.11"
+        versionCode 12
+        versionName "1.12"
 
         // 只编 arm64（手机主流，体积也小）
         ndk { abiFilters 'arm64-v8a' }
