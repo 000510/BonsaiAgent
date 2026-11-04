@@ -95,7 +95,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 null
             }
             if (fixed != null) status.value = fixed + "，正在加载…"
-            val ok = Llama.load(path, settings.value.threads, settings.value.contextSize)
+            // v1.10 排查版：强制单线程，排除 ggml 多线程 kernel 的竞态问题
+            val ok = Llama.load(path, 1, settings.value.contextSize)
             withContext(Dispatchers.Main) {
                 modelLoaded.value = ok
                 status.value = if (ok) {
