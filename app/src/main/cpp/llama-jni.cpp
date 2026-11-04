@@ -424,11 +424,15 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         log_line("diag: fork 子进程执行 decode");
         pid_t cpid = fork();
         if (cpid == 0) {
-            // 子进程：只跑 native，不碰 JNI/ART
+            // 子进程：先脱离父进程的进程组/会话。
+            // Android 的 debuggerd 在 native crash 后会对整个进程组下手，
+            // 不 setsid 的话父进程会跟着一起死，waitpid 永远不返回（v1.15 实测现象）。
+            setsid();
             int r = llama_decode(st->ctx, pb);
             _exit(r == 0 ? 0 : 1);
         } else if (cpid > 0) {
             int st = 0;
+            log_line("diag: 父进程等待子进程…");
             waitpid(cpid, &st, 0);
             if (WIFSIGNALED(st)) {
                 int sig = WTERMSIG(st);
