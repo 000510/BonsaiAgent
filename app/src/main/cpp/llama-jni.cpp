@@ -89,6 +89,9 @@ static const char* sig_name(int sig) {
         case SIGFPE:  return "SIGFPE ";
         case SIGILL:  return "SIGILL ";
         case SIGBUS:  return "SIGBUS ";
+        case SIGSYS:  return "SIGSYS ";
+        case SIGTRAP: return "SIGTRAP ";
+        case SIGQUIT: return "SIGQUIT ";
         default:      return "SIG? ";
     }
 }
@@ -137,8 +140,8 @@ static void install_crash_handlers() {
     // 去掉 SA_ONSTACK 后，handler 用当前线程的普通栈执行，32MB 够用。
     sa.sa_flags = SA_RESTART;
     sigemptyset(&sa.sa_mask);
-    int sigs[5] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS};
-    for (int i = 0; i < 5; i++) {
+    int sigs[8] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS, SIGSYS, SIGTRAP, SIGQUIT};
+    for (int i = 0; i < 8; i++) {
         struct sigaction old{};
         ::sigaction(sigs[i], &sa, &old);
     }
@@ -190,6 +193,18 @@ static void ggml_log_cb(enum ggml_log_level level, const char * text, void * /*u
     }
 }
 
+// v1.14：接住 ggml 的致命错误回调。
+// ggml_abort() 在 abort() 之前会先调用这个回调，把具体原因（文件:行号 + 消息）交出来。
+// 之前没接，所以即使 ggml 自己报了错，我们也什么都看不到。
+static ggml_abort_callback_t g_prev_abort_cb = nullptr;
+
+static void ggml_fatal_cb(const char * msg) {
+    log_line("[ggml FATAL] %s", msg ? msg : "(null msg)");
+    g_lastError += "[FATAL] ";
+    g_lastError += (msg ? msg : "(null)");
+    if (g_prev_abort_cb) g_prev_abort_cb(msg);
+}
+
 struct LlamaState {
     llama_model*   model;
     llama_context* ctx;
@@ -204,6 +219,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     install_crash_handlers();
     llama_backend_init();
     llama_log_set(ggml_log_cb, nullptr);
+    g_prev_abort_cb = ggml_set_abort_callback(ggml_fatal_cb);   // v1.14
     return JNI_VERSION_1_6;
 }
 
