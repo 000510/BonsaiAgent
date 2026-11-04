@@ -130,13 +130,28 @@ static void install_crash_handlers() {
 
     struct sigaction sa{};
     sa.sa_handler = crash_handler;
-    sa.sa_flags = SA_ONSTACK | SA_RESTART;
+    // 关键修复（v1.13）：这里原来带 SA_ONSTACK，是本项目最大的"左脚踩右脚"。
+    // altstack 是按线程生效的，只在 JNI_OnLoad 那个线程设过；真正跑 llama_decode 的
+    // "llama-gen" 线程没有 altstack，内核无法投递信号 → 直接杀进程，handler 从不执行，
+    // 于是 last_crash.txt / native_stderr.txt 全空，看起来像"无声消失"。
+    // 去掉 SA_ONSTACK 后，handler 用当前线程的普通栈执行，32MB 够用。
+    sa.sa_flags = SA_RESTART;
     sigemptyset(&sa.sa_mask);
     int sigs[5] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS};
     for (int i = 0; i < 5; i++) {
         struct sigaction old{};
         ::sigaction(sigs[i], &sa, &old);
     }
+}
+
+// 给"当前线程"装一份 altstack。必须在真正干活的线程里调用，
+// 因为 sigaltstack 只对调用它的那个线程生效。
+static void install_altstack_here() {
+    stack_t ss{};
+    ss.ss_sp    = g_altStack;
+    ss.ss_size  = sizeof(g_altStack);
+    ss.ss_flags = 0;
+    ::sigaltstack(&ss, nullptr);
 }
 
 // .../files/models/xxx.gguf -> .../files/
@@ -304,6 +319,10 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
 
     auto* st = reinterpret_cast<LlamaState*>(handle);
     if (!st || !st->ctx || !st->model) return env->NewStringUTF("[模型未初始化]");
+
+    // 这个函数跑在 Kotlin 侧的 "llama-gen" 线程，必须在本线程装 altstack，
+    // 否则该线程上的 SIGSEGV 会因为拿不到备用栈而被内核直接杀进程（v1.13 修复）
+    install_altstack_here();
 
     g_lastError.clear();
     set_stage("tokenize");
