@@ -64,6 +64,61 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             crash.isNotEmpty() -> status.value = "上次原生崩溃：\n$crash$tail"
             tail.isNotEmpty()  -> status.value = "上次运行记录：$tail"
         }
+
+        // v3.2：抓系统 logcat。
+        // 目的：v3.1 的所有 wrap(abort/assert/...) 都没触发、stderr 也全空，
+        // 说明进程不是"自己退出的"。只剩两种可能，且必须先分清：
+        //   ① 硬崩溃(SIGSEGV/SIGBUS) —— logcat 会有 "Fatal signal"，crash buffer 有 backtrace
+        //   ② 被系统 SIGKILL(MIUI 杀后台 / LMK) —— logcat 会有 lowmemorykiller / Killing
+        // 这两者如果没 logcat，看起来完全一样，所以这一步是"定责"的关键。
+        Thread {
+            val lc = dumpLogcat()
+            if (lc.isNotBlank()) {
+                try {
+                    java.io.File(app.filesDir, "logcat_dump.txt").writeText(lc)
+                } catch (e: Throwable) { /* 忽略 */ }
+                mainHandler.post {
+                    status.value = status.value + "\n\n===== 系统日志 =====\n" + lc
+                }
+            }
+        }, "logcat-dump").start()
+    }
+
+    /**
+     * 读自己进程的 logcat（Android 允许 app 读自己 uid 的日志）。
+     * - crash buffer：原生崩溃记录，含 tombstone 的 backtrace，信息量最大
+     * - main buffer：普通的进程活动，能看出是否被 LMK / 系统杀掉
+     * 只保留可能有用的行，避免把状态栏撑爆。
+     */
+    private fun dumpLogcat(): String {
+        val keys = listOf(
+            "Fatal signal", "SIGSEGV", "SIGBUS", "SIGILL", "SIGABRT", "SIGKILL",
+            "tombstone", "DEBUG", "libbonsai", "bonbai", "bonsai", "BonsaiLLM",
+            "lowmemorykiller", "Killing", "kill", "ANR", "OutOfMemory", "!!!",
+            "fatal", "Abort", "abort", "dlopen", "UnsatisfiedLink"
+        )
+        fun looksImportant(l: String) = keys.any { l.contains(it, ignoreCase = true) }
+
+        val sb = StringBuilder()
+        val bufs = listOf(
+            listOf("logcat", "-b", "crash", "-d", "-v", "time"),
+            listOf("logcat", "-b", "main", "-d", "-v", "time", "-t", "4000")
+        )
+        for (cmd in bufs) {
+            try {
+                val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
+                val out = p.inputStream.bufferedReader().readText()
+                p.waitFor()
+                val kept = out.lines().filter { it.isNotBlank() && looksImportant(it) }.takeLast(45)
+                if (kept.isNotEmpty()) {
+                    sb.append("\n[").append(cmd[2]).append("]\n")
+                    sb.append(kept.joinToString("\n"))
+                }
+            } catch (e: Throwable) {
+                sb.append("\n[").append(cmd[2]).append("] 读取失败: ").append(e.message)
+            }
+        }
+        return sb.toString().trim()
     }
 
     /** 从系统选择器导入 .gguf 并加载 */

@@ -24,6 +24,9 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <pthread.h>
+#include <dlfcn.h>
+#include <execinfo.h>
 #include <android/log.h>
 #include "llama.h"
 
@@ -161,6 +164,94 @@ void __wrap___assert(const char* file, int line, const char* expr) {
 }
 }  // extern "C"
 
+// ---------------------------------------------------------------------------
+// v3.2：进程级故障信号拦截（带"只接自己线程"的过滤）
+//
+// 为什么加：
+//   v3.1 的 wrap(abort/assert/...) 一个都没触发、stderr 也全空 —— 说明进程
+//   不是"自己退出的"，而是撞了内存访问错误，或被系统直接 SIGKILL。
+//   装上这个 handler 就能把前者抓出来（还能知道崩在哪个 .so、故障地址多少）。
+//
+// 为什么不破坏 ART：
+//   ART 的并发 GC 用 SIGSEGV 做读写屏障，信号是高频的。如果全接住，
+//   App 会在 GC 时被我们误杀。所以这里按【线程名】分流：
+//     - 线程名含 llama/ggml/bonsai  → 是我们在跑推理，记录后退出
+//     - 其它线程（main/GC/... 即 ART）→ 原样转发给 ART 自己的 handler
+// ---------------------------------------------------------------------------
+static struct sigaction g_old_sa[4];
+static int              g_old_sig[4] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE};
+
+static void fault_handler(int sig, siginfo_t* si, void* uc) {
+    char tname[64] = {0};
+    pthread_getname_np(pthread_self(), tname, sizeof(tname));
+
+    bool ours = strstr(tname, "llama") || strstr(tname, "ggml") || strstr(tname, "bonsai");
+
+    if (!ours) {
+        // ART 自己的线程：原封不动转交给 ART 的处理器（例如 GC 屏障）
+        for (int i = 0; i < 4; i++) {
+            if (g_old_sig[i] == sig) {
+                const struct sigaction& o = g_old_sa[i];
+                if (o.sa_flags & SA_SIGINFO) {
+                    if (o.sa_sigaction) { o.sa_sigaction(sig, si, uc); return; }
+                } else if (o.sa_handler != SIG_DFL && o.sa_handler != SIG_IGN) {
+                    o.sa_handler(sig); return;
+                }
+                break;
+            }
+        }
+        // 没有可转交的，走默认
+        ::signal(sig, SIG_DFL);
+        ::raise(sig);
+        return;
+    }
+
+    // 是我们的线程崩了 —— 把能拿到的现场全记下来
+    void* addr = si ? si->si_addr : nullptr;
+    Dl_info info{};
+    const char* where = "?";
+    if (addr && ::dladdr(addr, &info) && info.dli_fname) where = info.dli_fname;
+
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+             "sig=%s thread=%s addr=%p in_lib=%s stage=%s",
+             sig_name(sig), tname, addr, where, g_stage);
+    write_fatal("原生信号故障", buf);
+
+    // 再抓一层调用栈（best-effort，崩溃时不一定可靠，有就赚到）
+    // 只写地址，不依赖 backtrace_symbols_fd（bionic 上不一定有）
+    void* bt[24];
+    int n = ::backtrace(bt, 24);
+    if (g_crashFile[0] && n > 0) {
+        int fd = ::open(g_crashFile, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (fd >= 0) {
+            char line[128];
+            const char* h = "backtrace:\n";
+            ssize_t ig = ::write(fd, h, strlen(h)); (void) ig;
+            for (int i = 0; i < n; i++) {
+                Dl_info bi{};
+                const char* nm = "?";
+                if (::dladdr(bt[i], &bi) && bi.dli_fname) nm = bi.dli_fname;
+                int k = snprintf(line, sizeof(line), "  #%d %p %s\n", i, bt[i], nm);
+                if (k > 0) { ig = ::write(fd, line, (size_t) k); (void) ig; }
+            }
+            ::close(fd);
+        }
+    }
+
+    _exit(139);
+}
+
+static void install_fault_handlers() {
+    struct sigaction sa{};
+    sa.sa_sigaction = fault_handler;
+    sa.sa_flags     = SA_SIGINFO | SA_RESTART;   // 不加 SA_ONSTACK：栈溢出已排除
+    sigemptyset(&sa.sa_mask);
+    for (int i = 0; i < 4; i++) {
+        ::sigaction(g_old_sig[i], &sa, &g_old_sa[i]);
+    }
+}
+
 static void crash_handler(int sig) {
     // 只做 open/write/close，全部用预格式化好的缓冲
     const char* name = sig_name(sig);
@@ -291,6 +382,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     // ART 一用 SIGSEGV 就被我们的 handler 截住 -> signal(SIG_DFL)+raise -> 进程直接死。
     // 而且在 ARM64+qemu 上跑同一份 llama.cpp 完全正常，证明问题就在这一层。
     // install_crash_handlers();
+    install_fault_handlers();   // v3.2：只拦截 llama/ggml 线程上的故障信号
     llama_backend_init();
     llama_log_set(ggml_log_cb, nullptr);
     g_prev_abort_cb = ggml_set_abort_callback(ggml_fatal_cb);   // v1.14

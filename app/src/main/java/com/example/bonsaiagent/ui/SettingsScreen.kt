@@ -1,6 +1,7 @@
 package com.example.bonsaiagent.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -27,12 +28,15 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
             Button(onClick = onPickModel) { Text("导入本地模型 (.gguf)") }
             OutlinedButton(onClick = vm::loadModel) { Text("加载模型") }
         }
-        Text(
-            vm.status.value,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (vm.modelLoaded.value) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.error
-        )
+        // 长按可复制：诊断日志太长，复制粘贴比截图清楚得多
+        SelectionContainer {
+            Text(
+                vm.status.value,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (vm.modelLoaded.value) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.error
+            )
+        }
 
         Divider(Modifier.padding(vertical = 8.dp))
         Text("推理参数", style = MaterialTheme.typography.titleMedium)
