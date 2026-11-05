@@ -141,8 +141,9 @@ jobs:
           LIBS=$(find build-arm -name "*.a" | tr '\n' ' ')
           aarch64-linux-gnu-g++ -O1 -g -std=c++17 -static \
             -I include -I ggml/include \
-            ../tools/harness.cpp $LIBS -lpthread -lm -ldl \
-            -o /tmp/harness_arm
+            ../tools/harness.cpp \
+            -Wl,--start-group $LIBS -Wl,--end-group \
+            -lpthread -lm -ldl -o /tmp/harness_arm
           file /tmp/harness_arm
 
       - name: 下载测试模型
