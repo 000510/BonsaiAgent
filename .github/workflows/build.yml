@@ -171,46 +171,35 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 装交叉环境
-        env:
-          ANDROID_HOME: /usr/local/lib/android/sdk
+      - name: 装环境
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user g++-aarch64-linux-gnu
-          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "ndk;25.2.9519653" > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user g++-aarch64-linux-gnu clang
 
       - name: 克隆 llama.cpp (主线)
         run: git clone --depth 1 https://github.com/ggml-org/llama.cpp llamacpp
 
-      - name: 用 NDK clang 编 glibc/linux 版 libllama (aarch64 静态)
+      - name: 用 clang 交叉编译 libllama (aarch64 静态)
         run: |
           cd llamacpp
-          NDK=$ANDROID_HOME/ndk/25.2.9519653
-          CLANG=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++
-          CCLANG=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang
           cmake -B build-clang \
             -DCMAKE_SYSTEM_NAME=Linux \
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-            -DCMAKE_C_COMPILER=$CCLANG \
-            -DCMAKE_CXX_COMPILER=$CLANG \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_C_COMPILER_TARGET=aarch64-linux-gnu \
             -DCMAKE_CXX_COMPILER_TARGET=aarch64-linux-gnu \
-            -DCMAKE_SYSROOT=/usr/aarch64-linux-gnu \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
             -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TOOLS=OFF
           cmake --build build-clang --target llama -j4
 
-      - name: 用 NDK clang 编 harness (静态)
+      - name: 用 clang 编 harness (静态)
         run: |
           cd llamacpp
-          NDK=$ANDROID_HOME/ndk/25.2.9519653
-          CLANG=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++
           LIBS=$(find build-clang -name "*.a" | tr '\n' ' ')
-          $CLANG -O1 -g -std=c++17 -static \
-            --target=aarch64-linux-gnu --sysroot=/usr/aarch64-linux-gnu \
+          clang++ --target=aarch64-linux-gnu -O1 -g -std=c++17 -static \
             -I include -I ggml/include \
             ../tools/harness.cpp $LIBS -lpthread -lm -ldl \
             -o /tmp/harness_clang
@@ -224,7 +213,7 @@ jobs:
             "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
           ls -lh /tmp/q.gguf
 
-      - name: qemu 运行 NDK-clang 版本
+      - name: qemu 运行 clang 版本
         run: |
           set +e
           timeout 900 qemu-aarch64 /tmp/harness_clang /tmp/q.gguf "hello" 2>&1 | tail -50
