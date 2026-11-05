@@ -38,7 +38,7 @@ fun RouterScreen(vm: MainViewModel) {
             state = listState,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(vm.agentMessages, key = { it }) { msg -> Bubble(msg) }
+            items(vm.agentMessages, key = { it.id }) { msg -> Bubble(msg) }
         }
 
         Row(

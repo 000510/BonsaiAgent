@@ -22,8 +22,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+// 全局自增，保证每条消息的 id 唯一 —— LazyColumn 的 key 必须是能存进 Bundle 的简单类型
+private var chatMsgSeq = 0L
+
 /** 一条聊天消息（content 用 State，便于流式更新触发重组） */
 class ChatMessage(val role: String) {
+    // v3.3 关键修复：给每条消息一个稳定的 Long id。
+    // 之前 LazyColumn 写成 items(list, key = { it })，直接把 ChatMessage 对象当 key，
+    // Compose 存状态时抛 "Type of the key ... is not supported" —— 主线程异常 → 进程直接死。
+    // 表现和 native 崩溃一模一样：瞬间闪退、没有 tombstone、日志停在半路。
+    val id: Long = ++chatMsgSeq
     val content = mutableStateOf("")
 }
 

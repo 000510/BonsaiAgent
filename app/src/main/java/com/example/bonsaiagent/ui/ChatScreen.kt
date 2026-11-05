@@ -24,7 +24,7 @@ fun ChatScreen(vm: MainViewModel) {
             state = listState,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(vm.chatMessages, key = { it }) { msg -> Bubble(msg) }
+            items(vm.chatMessages, key = { it.id }) { msg -> Bubble(msg) }
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
