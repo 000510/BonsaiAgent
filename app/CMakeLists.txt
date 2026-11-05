@@ -36,6 +36,17 @@ set(GGML_CPU_ARM_ARCH "armv8-a" CACHE STRING "" FORCE)
 # ↑↑↑ 排查用，若无效可整段删掉 ↑↑↑
 
 # 编译 llama.cpp 核心（fork 自带 CMakeLists，会产出 llama / ggml 等 target）
+#
+# v3.1 关键：必须让 llama/ggml 以【静态库】形式链进 libbonsai_llm.so。
+# 原因：-Wl,--wrap=abort 只对本链接单元内的未定义符号引用生效。
+# 若 ggml 编成独立的 libggml-cpu.so，那么 ggml 内部的 abort() 调用发生在
+# 那个 .so 自己的链接单元里，我们的 __wrap_abort 永远接不到 —— 白改。
+set(BUILD_SHARED_LIBS     OFF CACHE BOOL "" FORCE)
+set(GGML_SHARED           OFF CACHE BOOL "" FORCE)
+set(GGML_STATIC           ON  CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SHARED    OFF CACHE BOOL "" FORCE)
+set(LLAMA_STATIC          ON  CACHE BOOL "" FORCE)
+
 add_subdirectory(${LLAMA_DIR} llamacpp_build)
 
 # 我们的 JNI 桥（源文件在 src/main/cpp 下）
@@ -53,6 +64,15 @@ target_link_libraries(bonsai_llm
     llama
     ggml
     ${log-lib}
+)
+
+# 静态链接后 ggml 用到的系统库要显式补上（CMake 会自动带 TRANSITIVE，这里兜底）
+# 注意：不要引入 libOpenMP，GGML_OPENMP 已关。
+target_link_libraries(bonsai_llm PRIVATE
+    android
+    z
+    dl
+    m
 )
 
 # ---------------------------------------------------------------------------
