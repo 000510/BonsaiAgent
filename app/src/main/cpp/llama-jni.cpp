@@ -26,7 +26,6 @@
 #include <sys/wait.h>
 #include <pthread.h>
 #include <dlfcn.h>
-#include <execinfo.h>
 #include <android/log.h>
 #include "llama.h"
 
@@ -218,23 +217,18 @@ static void fault_handler(int sig, siginfo_t* si, void* uc) {
              sig_name(sig), tname, addr, where, g_stage);
     write_fatal("原生信号故障", buf);
 
-    // 再抓一层调用栈（best-effort，崩溃时不一定可靠，有就赚到）
-    // 只写地址，不依赖 backtrace_symbols_fd（bionic 上不一定有）
-    void* bt[24];
-    int n = ::backtrace(bt, 24);
-    if (g_crashFile[0] && n > 0) {
+    // 调用栈：bionic 没有 glibc 的 backtrace()，这里退一步，
+    // 只再取一层返回地址（能区分"崩在 llama_decode 直接调用层"还是更深）。
+    if (g_crashFile[0]) {
         int fd = ::open(g_crashFile, O_WRONLY | O_CREAT | O_APPEND, 0600);
         if (fd >= 0) {
-            char line[128];
-            const char* h = "backtrace:\n";
-            ssize_t ig = ::write(fd, h, strlen(h)); (void) ig;
-            for (int i = 0; i < n; i++) {
-                Dl_info bi{};
-                const char* nm = "?";
-                if (::dladdr(bt[i], &bi) && bi.dli_fname) nm = bi.dli_fname;
-                int k = snprintf(line, sizeof(line), "  #%d %p %s\n", i, bt[i], nm);
-                if (k > 0) { ig = ::write(fd, line, (size_t) k); (void) ig; }
-            }
+            Dl_info ri{};
+            const char* rn = "?";
+            void* ra = __builtin_return_address(0);
+            if (ra && ::dladdr(ra, &ri) && ri.dli_fname) rn = ri.dli_fname;
+            char line[192];
+            int k = snprintf(line, sizeof(line), "ret0=%p in=%s\n", ra, rn);
+            if (k > 0) { ssize_t ig = ::write(fd, line, (size_t) k); (void) ig; }
             ::close(fd);
         }
     }
