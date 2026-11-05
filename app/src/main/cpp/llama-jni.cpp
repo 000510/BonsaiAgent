@@ -259,7 +259,8 @@ Java_com_example_bonsaiagent_llm_Llama_init(
         // 每次加载开一份新日志
         int fd = ::open(g_logFile, O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd >= 0) ::close(fd);
-        redirect_stderr(ef);
+        // v2.2: 不再重定向 stderr，避免 dup2 干扰（先排除所有"额外"动作）
+        (void) ef;
     }
 
     log_line("===== 开始加载 =====");

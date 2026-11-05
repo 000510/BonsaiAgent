@@ -134,7 +134,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val txt = buf.toString()
                     mainHandler.post { ai.content.value = txt }
                 }
-            }, "llama-gen", 32L * 1024 * 1024)
+            }, "llama-gen")   // v2.2: 回退自定义栈大小(32MB)，用默认栈
             worker.start()
             worker.join()
         }
@@ -163,7 +163,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val txt = raw.toString()
                     mainHandler.post { ai.content.value = txt }
                 }
-            }, "llama-gen", 32L * 1024 * 1024)
+            }, "llama-gen")   // v2.2: 回退自定义栈大小(32MB)，用默认栈
             worker.start()
             worker.join()
             // 解析路由指令
