@@ -293,7 +293,8 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     cparams.n_ubatch        = 64;
     cparams.n_threads       = (uint32_t) (n_threads > 0 ? n_threads : 4);
     cparams.n_threads_batch = cparams.n_threads;
-    cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    // 主线版本该字段名/枚举可能不同，用默认值（AUTO）即可
+    // cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
     llama_context* ctx = llama_init_from_model(model, cparams);
     if (!ctx) {

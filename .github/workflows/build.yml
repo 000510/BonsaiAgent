@@ -30,7 +30,7 @@ jobs:
       - name: 克隆 PrismML llama.cpp（prism 分支，仅编译时需要）
         run: |
           cd app/src/main/cpp
-          git clone --branch prism --depth 1 https://github.com/PrismML-Eng/llama.cpp llamacpp
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp llamacpp
           cd llamacpp
           git submodule update --init --recursive
 
@@ -115,11 +115,11 @@ jobs:
       - name: 安装交叉编译器和 qemu
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq g++-aarch64-linux-gnu qemu-user-static
+          sudo apt-get install -y -qq g++-aarch64-linux-gnu qemu-user
 
       - name: 克隆 llama.cpp (prism)
         run: |
-          git clone --branch prism --depth 1 https://github.com/PrismML-Eng/llama.cpp llamacpp
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp llamacpp
           cd llamacpp && git submodule update --init --recursive || true
 
       - name: 交叉编译 libllama (aarch64 静态)
@@ -156,5 +156,5 @@ jobs:
       - name: qemu 运行 (关键)
         run: |
           set +e
-          timeout 900 qemu-aarch64-static -L /usr/aarch64-linux-gnu /tmp/harness_arm /tmp/q.gguf "你好" 2>&1 | tail -60
+          timeout 900 qemu-aarch64 -L /usr/aarch64-linux-gnu /tmp/harness_arm /tmp/q.gguf "你好" 2>&1 | tail -60
           echo "=========== exit=$? ==========="
