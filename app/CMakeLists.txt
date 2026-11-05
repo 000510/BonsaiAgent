@@ -13,6 +13,10 @@ project("bonsai_llm")
 
 set(LLAMA_DIR ${CMAKE_SOURCE_DIR}/src/main/cpp/llamacpp)
 
+# v1.17 排查：把优化等级降到 -O0，验证"ARM 下优化把 UB 放大导致崩溃"这个假设。
+# 若能跑通，再逐步升到 -O1 / -O2 二分定位。
+set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "" FORCE)
+
 # 只编 llama.cpp 核心库（libllama / libggml），关掉示例/测试/服务端，避免缺依赖报错
 set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

@@ -418,37 +418,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         llama_batch pb = llama_batch_get_one(tokens.data(), use_tok);
         log_line("prefill 提交 %d token，准备 llama_decode", use_tok);
 
-        // v1.15 诊断：fork 一个子进程去跑 decode。
-        // 子进程无论被什么信号杀死、或正常退出，父进程 waitpid 都能拿到确切的退出状态，
-        // 彻底绕开"信号处理器不触发、日志写不出来"的死结。
-        log_line("diag: fork 子进程执行 decode");
-        pid_t cpid = fork();
-        if (cpid == 0) {
-            // 子进程：先脱离父进程的进程组/会话。
-            // Android 的 debuggerd 在 native crash 后会对整个进程组下手，
-            // 不 setsid 的话父进程会跟着一起死，waitpid 永远不返回（v1.15 实测现象）。
-            setsid();
-            int r = llama_decode(st->ctx, pb);
-            _exit(r == 0 ? 0 : 1);
-        } else if (cpid > 0) {
-            int st = 0;
-            log_line("diag: 父进程等待子进程…");
-            waitpid(cpid, &st, 0);
-            if (WIFSIGNALED(st)) {
-                int sig = WTERMSIG(st);
-                log_line("!!! decode 子进程被信号 %d 杀死 (%s)", sig, sig_name(sig));
-                g_lastError = "decode 被信号 " + std::to_string(sig) + " 终止";
-            } else if (WIFEXITED(st)) {
-                log_line("!!! decode 子进程正常退出，退出码 %d", WEXITSTATUS(st));
-                g_lastError = "decode 退出码 " + std::to_string(WEXITSTATUS(st));
-            }
-            llama_sampler_free(smpl);
-            set_stage("idle");
-            return env->NewStringUTF("[诊断完成：请查看上一次运行记录]");
-        } else {
-            log_line("!!! fork 失败: errno=%d", errno);
-        }
-
+        // v1.17: 回滚 fork 诊断（fork 在 ART 多线程进程里会继承已锁的锁，子进程死锁）
         int rc = llama_decode(st->ctx, pb);
         log_line("prefill decode 返回 %d", rc);
         if (rc != 0) {
