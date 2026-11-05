@@ -51,10 +51,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             t
         } else ""
         val log = if (logFile.exists()) {
-            try { logFile.readLines().takeLast(12).joinToString("\n") } catch (e: Throwable) { "" }
+            try { logFile.readLines().takeLast(25).joinToString("\n") } catch (e: Throwable) { "" }
         } else ""
         val nerr = if (errFile.exists()) {
-            try { errFile.readLines().takeLast(12).joinToString("\n").trim() } catch (e: Throwable) { "" }
+            try { errFile.readLines().takeLast(30).joinToString("\n").trim() } catch (e: Throwable) { "" }
         } else ""
         val tail = buildString {
             if (log.isNotEmpty()) append("\n\n日志：\n").append(log)

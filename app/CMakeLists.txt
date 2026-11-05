@@ -54,3 +54,16 @@ target_link_libraries(bonsai_llm
     ggml
     ${log-lib}
 )
+
+# ---------------------------------------------------------------------------
+# v3.0 诊断：把静态库(ggml)里对 abort/assert/__stack_chk_fail/__fortify_fail
+# 的引用全部重定向到 llama-jni.cpp 里的 __wrap_xxx 实现，
+# 这样"程序自尽"的最后一步会被我们记录下来再退出 —— 死因不再丢失。
+# ---------------------------------------------------------------------------
+target_link_options(bonsai_llm PRIVATE
+    -Wl,--wrap=abort
+    -Wl,--wrap=__assert2
+    -Wl,--wrap=__assert
+    -Wl,--wrap=__stack_chk_fail
+    -Wl,--wrap=__fortify_fail
+)

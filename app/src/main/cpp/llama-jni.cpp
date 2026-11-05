@@ -98,6 +98,69 @@ static const char* sig_name(int sig) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// v3.0 诊断：劫持"程序自尽"的四个入口
+//
+// 背景：ggml/llama 内部发现问题时走 GGML_ABORT()，最终落到 libc 的 abort()。
+// Android 上 native stderr 默认丢弃，所以我们连一句错误都看不到，看起来"无声消失"。
+// 用 -Wl,--wrap=xxx 把静态库(ggml)里对这些符号的引用重定向到我们自己的实现，
+// 就能把死因原样写进 run_log.txt。
+// ---------------------------------------------------------------------------
+static void write_fatal(const char* what, const char* detail) {
+    log_line("!!! 致命: %s%s%s", what, detail ? " | " : "", detail ? detail : "");
+    if (g_crashFile[0]) {
+        int fd = ::open(g_crashFile, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (fd >= 0) {
+            ssize_t ig;
+            ig = ::write(fd, what, strlen(what));  (void) ig;
+            if (detail) { ig = ::write(fd, " | ", 3); (void) ig;
+                          ig = ::write(fd, detail, strlen(detail)); (void) ig; }
+            ig = ::write(fd, "\n", 1); (void) ig;
+            ::close(fd);
+        }
+    }
+}
+
+extern "C" {
+void __real_abort(void) __attribute__((noreturn));
+
+// ggml 的 GGML_ABORT 最终调 abort()；这里接住并记录后立即结束，不让 ART 打 tombstone
+void __wrap_abort(void) {
+    write_fatal("ABORT (ggml/llama 内部致命错误)", g_stage);
+    _exit(66);
+}
+
+// bionic 的 assert() 走 __assert2(file, line, func, expr)
+void __wrap___assert2(const char* file, int line, const char* func, const char* expr) {
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s:%d %s() 断言失败: %s",
+             file ? file : "?", line, func ? func : "?", expr ? expr : "?");
+    write_fatal("ASSERT", buf);
+    _exit(67);
+}
+
+// 栈被踩坏（缓冲区溢出）时 bionic 调这个
+void __wrap___stack_chk_fail(void) {
+    write_fatal("STACK_CHK_FAIL (栈溢出/缓冲区越界，__stack_chk_guard 被改)", g_stage);
+    _exit(68);
+}
+
+// _FORTIFY_SOURCE 检查失败
+void __wrap___fortify_fail(const char* msg) {
+    write_fatal("FORTIFY_FAIL", msg ? msg : "?");
+    _exit(69);
+}
+
+// __assert 是老的 assert 入口，一并接住
+void __wrap___assert(const char* file, int line, const char* expr) {
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s:%d 断言失败: %s",
+             file ? file : "?", line, expr ? expr : "?");
+    write_fatal("ASSERT", buf);
+    _exit(70);
+}
+}  // extern "C"
+
 static void crash_handler(int sig) {
     // 只做 open/write/close，全部用预格式化好的缓冲
     const char* name = sig_name(sig);
@@ -171,11 +234,15 @@ static bool files_dir_from_model(const std::string& modelPath, std::string& out)
 
 // 把 C 层 stderr 也接到文件里：ggml 的 "fatal error" 大多走 fprintf(stderr)
 static void redirect_stderr(const std::string& path) {
+    // v3.0：恢复 stderr 落盘。ggml 的 "fatal error"、warn、assert 消息全走 fprintf(stderr)，
+    // Android 上 native stderr 默认被丢弃 —— 不接住就等于闭着眼找 bug。
+    // 关键：必须关掉缓冲，否则进程被 kill 时缓冲区里的内容永远写不出去。
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd >= 0) {
         ::dup2(fd, STDERR_FILENO);
         if (fd != STDERR_FILENO) ::close(fd);
     }
+    ::setvbuf(stderr, nullptr, _IONBF, 0);   // 无缓冲，逐字节落盘
 }
 
 // ---------------------------------------------------------------------------
@@ -259,8 +326,9 @@ Java_com_example_bonsaiagent_llm_Llama_init(
         // 每次加载开一份新日志
         int fd = ::open(g_logFile, O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd >= 0) ::close(fd);
-        // v2.2: 不再重定向 stderr，避免 dup2 干扰（先排除所有"额外"动作）
-        (void) ef;
+        // v3.0：恢复 stderr 落盘（ggml 的致命错误全走 fprintf(stderr)，Android 默认丢弃）
+        redirect_stderr(ef);
+        log_line("stderr 已接入 %s", ef.c_str());
     }
 
     log_line("===== 开始加载 =====");
