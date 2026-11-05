@@ -218,7 +218,12 @@ static jmethodID g_cbMethod = nullptr;
 
 JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     g_vm = vm;
-    install_crash_handlers();
+    // v2.1 关键修复：不再安装自定义信号处理器。
+    // 原因：install_crash_handlers() 会覆盖 ART 自己的 SIGSEGV 处理器，
+    // 而 ART 的并发 GC 用 SIGSEGV 实现读写屏障。decode 时大量分配内存触发 GC，
+    // ART 一用 SIGSEGV 就被我们的 handler 截住 -> signal(SIG_DFL)+raise -> 进程直接死。
+    // 而且在 ARM64+qemu 上跑同一份 llama.cpp 完全正常，证明问题就在这一层。
+    // install_crash_handlers();
     llama_backend_init();
     llama_log_set(ggml_log_cb, nullptr);
     g_prev_abort_cb = ggml_set_abort_callback(ggml_fatal_cb);   // v1.14
