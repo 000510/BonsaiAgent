@@ -71,7 +71,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         //   ① 硬崩溃(SIGSEGV/SIGBUS) —— logcat 会有 "Fatal signal"，crash buffer 有 backtrace
         //   ② 被系统 SIGKILL(MIUI 杀后台 / LMK) —— logcat 会有 lowmemorykiller / Killing
         // 这两者如果没 logcat，看起来完全一样，所以这一步是"定责"的关键。
-        Thread {
+        Thread({
             val lc = dumpLogcat()
             if (lc.isNotBlank()) {
                 try {
