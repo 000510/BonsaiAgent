@@ -64,11 +64,6 @@ target_link_libraries(bonsai_llm
     llama
     ggml
     ${log-lib}
-)
-
-# 静态链接后 ggml 用到的系统库要显式补上（CMake 会自动带 TRANSITIVE，这里兜底）
-# 注意：不要引入 libOpenMP，GGML_OPENMP 已关。
-target_link_libraries(bonsai_llm PRIVATE
     android
     z
     dl
