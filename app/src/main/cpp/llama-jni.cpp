@@ -475,6 +475,34 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     }
 
     ensure_backend();   // 此时日志文件已就绪，后端加载情况能落盘
+    // v5.3：把 CPU 指令集能力打出来。
+    // 这是能不能启用 dotprod / i8mm 加速的唯一依据（编译期决定指令集，
+    // 编错了会 SIGILL）。用户把日志发来就能对症选 arch。
+    {
+        std::string feat;
+        FILE* f = fopen("/proc/cpuinfo", "r");
+        if (f) {
+            char line[4096];
+            while (fgets(line, sizeof(line), f)) {
+                if (strncmp(line, "Features", 8) == 0) { feat = line; break; }
+            }
+            fclose(f);
+        }
+        auto has = [&](const char* k) {
+            return feat.find(k) != std::string::npos;
+        };
+        log_line("CPU 特性: dotprod=%d i8mm=%d sve=%d sve2=%d fp16=%d "
+                 "(asimddp=%d asimdhp=%d i8mm=%d)",
+                 has("asimddp") ? 1 : 0,
+                 has("i8mm") ? 1 : 0,
+                 has("sve") ? 1 : 0,
+                 has("sve2") ? 1 : 0,
+                 has("asimdhp") ? 1 : 0,
+                 has("asimddp") ? 1 : 0,
+                 has("asimdhp") ? 1 : 0,
+                 has("i8mm") ? 1 : 0);
+    }
+
     log_line("===== 开始加载 =====");
     log_line("可用内存 %ld MB", mem_available_mb());
     log_line("路径 %s", spath.c_str());
