@@ -168,8 +168,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 null
             }
             if (fixed != null) status.value = fixed + "，正在加载…"
-            // v1.10 排查版：强制单线程，排除 ggml 多线程 kernel 的竞态问题
-            val ok = Llama.load(path, 1, settings.value.contextSize)
+            // v4.0：不再强制单线程。
+            // 之前为了排除多线程竞态写死 1 线程，代价是手机 8 个核只用 1 个，
+            // 光这一项就是数倍差距（真凶已查明是 UI 的 item key，与线程无关）。
+            // 取 CPU 核数，但上限 4。手机多是"4 大核 + 4 小核"，
+            // 线程开到 6~8 会把任务调度到小核上，反而更慢，还更容易降频。
+            val cores = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+            val ok = Llama.load(path, cores, settings.value.contextSize)
             withContext(Dispatchers.Main) {
                 modelLoaded.value = ok
                 status.value = if (ok) {

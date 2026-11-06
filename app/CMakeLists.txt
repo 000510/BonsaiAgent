@@ -13,10 +13,17 @@ project("bonsai_llm")
 
 set(LLAMA_DIR ${CMAKE_SOURCE_DIR}/src/main/cpp/llamacpp)
 
-# v1.18 排查：Release 配置也强制 -O0，验证"ARM 下优化把 UB 放大导致崩溃"这个假设。
-# 直接改 _FLAGS_RELEASE 才有效，光设 CMAKE_BUILD_TYPE 会被 AGP 覆盖。
-set(CMAKE_C_FLAGS_RELEASE   "-O0 -g" CACHE STRING "" FORCE)
-set(CMAKE_CXX_FLAGS_RELEASE "-O0 -g" CACHE STRING "" FORCE)
+# ---------------------------------------------------------------------------
+# v4.0：撤销所有排查用的降级设置 —— 真凶是 UI 的 item key（已修），这些不再需要。
+#
+# 之前为了"排除优化放大 UB"把编译优化强制成 -O0。实测 0.5B 模型单线程要
+# 几十秒一个 token —— 其中很大一块就是 -O0 造成的（比 -O2 慢 5~10 倍）。
+# 现在统一用 -O3；Debug 构建也带上，避免调试版慢得没法用。
+# ---------------------------------------------------------------------------
+set(CMAKE_C_FLAGS_RELEASE   "-O3 -g" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g" CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS_DEBUG     "-O3 -g" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG   "-O3 -g" CACHE STRING "" FORCE)
 
 # 只编 llama.cpp 核心库（libllama / libggml），关掉示例/测试/服务端，避免缺依赖报错
 set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
@@ -24,16 +31,21 @@ set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 
-# ↓↓↓ 排查安卓端 llama_decode 静默崩溃时加的降级开关（放在 add_subdirectory 之前才生效）↓↓↓
-# 关掉 OpenMP：避免 omp 运行时在某些 SoC 上初始化即崩
-set(GGML_OPENMP           OFF CACHE BOOL "" FORCE)
-# 关掉按本机 CPU 自动挑指令集：避免选到 SoC 不支持的 NEON/i8mm 变体
-set(GGML_NATIVE           OFF CACHE BOOL "" FORCE)
-# 强制最保守的 ARMv8.0 基线：不启用 dotprod / i8mm / fp16 等扩展。
-# 这些扩展在部分 SoC 上缺失，运行到对应指令会直接 SIGILL（进程无声消失）。
-# 注意：GGML_CPU_ARM_ARCH 与 GGML_CPU_ALL_VARIANTS 互斥，所以不再设后者。
-set(GGML_CPU_ARM_ARCH "armv8-a" CACHE STRING "" FORCE)
-# ↑↑↑ 排查用，若无效可整段删掉 ↑↑↑
+# ---------------------------------------------------------------------------
+# v4.0：恢复性能相关设置
+# ---------------------------------------------------------------------------
+# OpenMP 仍关闭：llama.cpp 自己用 std::thread 线程池，不需要 OpenMP。
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+# GGML_NATIVE 在交叉编译（NDK）下必须 OFF，否则会按编译机的 CPU 生成指令。
+set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+
+# 关键提速项：为同一份 ARM64 代码编出多个指令集变体（armv8.0 / dotprod / i8mm / sve），
+# 运行时按当前 CPU 实际能力挑最快的那个。
+# 之前强制 armv8-a 基线是为了排除 SIGILL，但后来反汇编确认 .so 里根本没有
+# dotprod/i8mm/LSE/SVE 指令 —— 说明这类设备支持，白白的性能没用上。
+# 量化点积用上 dotprod / i8mm 通常能快 2~4 倍。
+# 注意：GGML_CPU_ARM_ARCH 与 GGML_CPU_ALL_VARIANTS 互斥，只能取其一。
+set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
 
 # 编译 llama.cpp 核心（fork 自带 CMakeLists，会产出 llama / ggml 等 target）
 #
