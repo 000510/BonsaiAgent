@@ -174,7 +174,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // 取 CPU 核数，但上限 4。手机多是"4 大核 + 4 小核"，
             // 线程开到 6~8 会把任务调度到小核上，反而更慢，还更容易降频。
             val cores = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
-            val ok = Llama.load(path, cores, settings.value.contextSize)
+            // 动态后端需要知道 .so 目录（ggml 会在这里找 libggml-cpu-android_armvX_*.so）
+            val nativeDir = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
+            val ok = Llama.load(path, cores, settings.value.contextSize, nativeDir)
             withContext(Dispatchers.Main) {
                 modelLoaded.value = ok
                 status.value = if (ok) {

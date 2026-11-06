@@ -28,6 +28,7 @@
 #include <dlfcn.h>
 #include <android/log.h>
 #include "llama.h"
+#include "ggml-backend.h"
 
 #define TAG "BonsaiLLM"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
@@ -351,6 +352,11 @@ static void ggml_log_cb(enum ggml_log_level level, const char * text, void * /*u
 // ggml_abort() 在 abort() 之前会先调用这个回调，把具体原因（文件:行号 + 消息）交出来。
 // 之前没接，所以即使 ggml 自己报了错，我们也什么都看不到。
 static ggml_abort_callback_t g_prev_abort_cb = nullptr;
+// v4.0：后端改为动态加载（GGML_BACKEND_DL）后，必须在 llama_backend_init()
+// 之前告诉 ggml 去哪里 dlopen 那些 libggml-cpu-*.so。
+// Android 上 /proc/self/exe 指向 zygote，ggml 默认按它找目录必然落空，
+// 所以由 Kotlin 侧传入 applicationInfo.nativeLibraryDir。
+static bool g_backend_ready = false;
 
 static void ggml_fatal_cb(const char * msg) {
     log_line("[ggml FATAL] %s", msg ? msg : "(null msg)");
@@ -377,10 +383,32 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     // 而且在 ARM64+qemu 上跑同一份 llama.cpp 完全正常，证明问题就在这一层。
     // install_crash_handlers();
     install_fault_handlers();   // v3.2：只拦截 llama/ggml 线程上的故障信号
-    llama_backend_init();
+    // v4.0：backend 初始化推迟到 setBackendPath + init()，
+    // 因为动态后端要先知道 .so 目录。
     llama_log_set(ggml_log_cb, nullptr);
     g_prev_abort_cb = ggml_set_abort_callback(ggml_fatal_cb);   // v1.14
     return JNI_VERSION_1_6;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_bonsaiagent_llm_Llama_setBackendPath(JNIEnv* env, jobject, jstring jdir) {
+    const char* d = env->GetStringUTFChars(jdir, nullptr);
+    if (d) {
+        ::setenv("GGML_BACKEND_PATH", d, 1);
+        // 只记到 logcat（此时日志文件还没确定路径）
+        LOGI("GGML_BACKEND_PATH=%s", d);
+        env->ReleaseStringUTFChars(jdir, d);
+    }
+}
+
+// 首次真正使用前初始化 backend（会按 GGML_BACKEND_PATH dlopen 各指令集变体）
+static void ensure_backend() {
+    if (g_backend_ready) return;
+    llama_backend_init();
+    g_backend_ready = true;
+    const char* bp = ::getenv("GGML_BACKEND_PATH");
+    log_line("backend 初始化完成，注册后端 %d 个 (GGML_BACKEND_PATH=%s)",
+             (int) ggml_backend_reg_count(), bp ? bp : "(未设置)");
 }
 
 static jlong fail(const char* stage) {
@@ -417,6 +445,7 @@ Java_com_example_bonsaiagent_llm_Llama_init(
         log_line("stderr 已接入 %s", ef.c_str());
     }
 
+    ensure_backend();   // 此时日志文件已就绪，后端加载情况能落盘
     log_line("===== 开始加载 =====");
     log_line("可用内存 %ld MB", mem_available_mb());
     log_line("路径 %s", spath.c_str());

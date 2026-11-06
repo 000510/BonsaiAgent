@@ -22,6 +22,13 @@ object Llama {
     }
 
     private external fun init(modelPath: String, nThreads: Int, nCtx: Int, nGpuLayers: Int): Long
+
+    /**
+     * v4.0：告诉 native 层 CPU 后端 .so 所在目录。
+     * 开了 GGML_BACKEND_DL 之后，ggml 会在运行时 dlopen 当前 CPU 支持的那份
+     * libggml-cpu-android_armvX_*.so；Android 上它自己找不到这个目录，必须显式指定。
+     */
+    private external fun setBackendPath(dir: String)
     private external fun lastError(): String
     private external fun setCallback(cb: Callback)
 
@@ -34,8 +41,13 @@ object Llama {
     fun isLoaded(): Boolean = handle != 0L
 
     /** 加载 .gguf 模型；threads 建议 = CPU 大核数，nCtx = 上下文窗口 */
-    fun load(modelPath: String, threads: Int, nCtx: Int): Boolean {
+    fun load(modelPath: String, threads: Int, nCtx: Int, backendDir: String? = null): Boolean {
         if (handle != 0L) unload()
+        if (!backendDir.isNullOrBlank()) {
+            try { setBackendPath(backendDir) } catch (e: Throwable) {
+                Log.w(TAG, "设置后端目录失败: ${e.message}")
+            }
+        }
         val h = init(modelPath, threads, nCtx, 0)
         if (h == 0L) {
             Log.e(TAG, "模型加载失败: $modelPath")
