@@ -416,12 +416,16 @@ static void ensure_backend() {
     // 必须显式扫描目录 dlopen。ggml 默认按 /proc/self/exe（Android 上是 zygote）
     // 找同目录，必然落空，所以这里直接把 APK 的 native 库目录传进去。
     // 它会匹配 libggml-cpu-*.so，再按文件名里的 armv8.x 版本评分挑最优的那份。
-    if (g_backendDir[0]) {
-        log_line("加载动态后端，目录=%s", g_backendDir);
-        ggml_backend_load_all_from_path(g_backendDir);
-    } else {
-        log_line("未拿到后端目录，退回默认搜索路径");
-        ggml_backend_load_all();
+    // v5.1：静态链接时 CPU 后端已编进主库，ggml_backend_reg_count() 一开始就非 0，
+    // 不需要（也不应该）再去 dlopen。只有注册数为 0 才走动态加载兜底。
+    if (ggml_backend_reg_count() == 0) {
+        if (g_backendDir[0]) {
+            log_line("后端数为 0，尝试动态加载，目录=%s", g_backendDir);
+            ggml_backend_load_all_from_path(g_backendDir);
+        } else {
+            log_line("后端数为 0，退回默认搜索路径");
+            ggml_backend_load_all();
+        }
     }
 
     g_backend_ready = true;

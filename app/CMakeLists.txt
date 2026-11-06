@@ -47,23 +47,26 @@ set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 # GGML_NATIVE 在交叉编译（NDK）下必须 OFF，否则会按编译机的 CPU 生成指令。
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 
-# 关键提速项：编出多个 CPU 指令集变体，运行时挑最快且确定支持的那一份。
-# 量化点积用上 dotprod / i8mm 通常能快 2~4 倍。
-# 之前强制 armv8-a 基线（为排查 SIGILL），代价是把这部分性能全丢了。
-# 注意：GGML_CPU_ARM_ARCH 与 GGML_CPU_ALL_VARIANTS 互斥，只能取其一。
-set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
+# ALL_VARIANTS（多指令集变体）依赖 BACKEND_DL，静态模式下必须关闭。
+# 静态版用默认基线（armv8-a，已含 NEON，三值 kernel 能用），
+# 代价是拿不到 dotprod/i8mm 的额外加速，先保证能跑。
+set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
 
 # 编译 llama.cpp 核心（fork 自带 CMakeLists，会产出 llama / ggml 等 target）
 #
-# v4.0：改为动态后端（GGML_BACKEND_DL）。
-# 这样才能同时拿到"多指令集变体"和"运行时安全选择"：
-#   ggml 会为 armv8.0 / dotprod / i8mm / sve 各编一份 CPU 后端 .so，
-#   启动时读 /proc/cpuinfo 的能力位，只 dlopen 当前 CPU 真正支持的那一份。
-# 直接写死 armv8.2+dotprod 会快，但万一 CPU 不支持就是 SIGILL —— 不冒这个险。
-set(BUILD_SHARED_LIBS  ON  CACHE BOOL "" FORCE)
-set(GGML_SHARED        ON  CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_SHARED ON  CACHE BOOL "" FORCE)
-set(GGML_BACKEND_DL    ON  CACHE BOOL "" FORCE)
+# v5.1：退回静态链接。
+# 原因：动态后端（BACKEND_DL）在 prism 分支 + 三值模型这条路径上会崩：
+#   ggml_backend_tensor_get_async 里调了空函数指针（addr=0xc 的 SIGSEGV），
+#   栈是 ggml_abort ← ggml_backend_tensor_get_async ← llama_context::decode。
+#   模型能加载、graph 能建（961 节点），一进 decode 取张量就踩空。
+# 静态链接把这层间接调用全部编掉，同时还让 -Wl,--wrap=abort 重新生效
+# （跨 .so 时 --wrap 是无效的，这正是之前抓不到 ggml_abort 消息的原因）。
+set(BUILD_SHARED_LIBS  OFF CACHE BOOL "" FORCE)
+set(GGML_SHARED        OFF CACHE BOOL "" FORCE)
+set(GGML_STATIC        ON  CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(LLAMA_STATIC       ON  CACHE BOOL "" FORCE)
+set(GGML_BACKEND_DL    OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(${LLAMA_DIR} llamacpp_build)
 
