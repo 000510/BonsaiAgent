@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <chrono>
 #include <pthread.h>
 #include <dlfcn.h>
 #include <android/log.h>
@@ -425,6 +426,10 @@ static void ensure_backend() {
     g_backend_ready = true;
     int nreg = (int) ggml_backend_reg_count();
     log_line("backend 初始化完成，注册后端 %d 个", nreg);
+    for (int i = 0; i < nreg; i++) {
+        ggml_backend_reg_t rg = ggml_backend_reg_get((size_t) i);
+        if (rg) log_line("  后端[%d] = %s", i, ggml_backend_reg_name(rg));
+    }
     if (nreg == 0) {
         g_lastError = "没有加载到任何 CPU 后端（动态库 dlopen 失败）";
     }
@@ -628,8 +633,11 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         log_line("prefill 提交 %d token，准备 llama_decode", use_tok);
 
         // v1.17: 回滚 fork 诊断（fork 在 ART 多线程进程里会继承已锁的锁，子进程死锁）
+        auto tp0 = std::chrono::steady_clock::now();
         int rc = llama_decode(st->ctx, pb);
-        log_line("prefill decode 返回 %d", rc);
+        double psec = std::chrono::duration<double>(std::chrono::steady_clock::now() - tp0).count();
+        log_line("prefill decode 返回 %d（耗时 %.2f 秒，%.1f tok/s）",
+                 rc, psec, psec > 0 ? use_tok / psec : 0.0);
         if (rc != 0) {
             llama_sampler_free(smpl);
             g_lastError = "prefill 失败，ret=" + std::to_string(rc);
@@ -661,6 +669,9 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     std::string full;
     int n_past = n_tok;
     char buf[512];
+
+    auto tg0 = std::chrono::steady_clock::now();
+    int n_gen = 0;
 
     for (int i = 0; i < budget; i++) {
         if (i % 8 == 0) {
@@ -700,7 +711,17 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             break;
         }
         n_past++;
+        n_gen++;
         if (n_past >= n_ctx - 1) break;
+    }
+
+    // v4.2：把真实速度打出来 —— 这是判断"优化到底有没有生效"的唯一硬指标。
+    // 0.5B Q4_K_M 在 4 线程的合理区间是 10~20 tok/s；若只有 1~2，说明计算路径没优化。
+    {
+        double gsec = std::chrono::duration<double>(std::chrono::steady_clock::now() - tg0).count();
+        log_line("生成速度 %.2f tok/s（%d token / %.2f 秒），n_threads=%u",
+                 gsec > 0 ? n_gen / gsec : 0.0, n_gen, gsec,
+                 llama_n_threads(st->ctx));
     }
 
     llama_sampler_free(smpl);

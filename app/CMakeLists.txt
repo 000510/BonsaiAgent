@@ -13,6 +13,12 @@ project("bonsai_llm")
 
 set(LLAMA_DIR ${CMAKE_SOURCE_DIR}/src/main/cpp/llamacpp)
 
+# v4.2 兜底：无条件给所有 target 追加 -O3。
+# 原因：CMake 的编译命令行顺序是 CMAKE_<LANG>_FLAGS → CMAKE_<LANG>_FLAGS_<CONFIG>
+# → add_compile_options → target 选项。AGP 若在某处塞了 -O0，后面这个 -O3 能盖掉它。
+# 推理速度几乎完全取决于这里 —— 实测漏掉优化会慢十几倍。
+add_compile_options(-O3 -fno-math-errno)
+
 # ---------------------------------------------------------------------------
 # v4.0：撤销所有排查用的降级设置 —— 真凶是 UI 的 item key（已修），这些不再需要。
 #
@@ -24,6 +30,8 @@ set(CMAKE_C_FLAGS_RELEASE   "-O3 -g" CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g" CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_DEBUG     "-O3 -g" CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_DEBUG   "-O3 -g" CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS_RELWITHDEBINFO   "-O3 -g" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g" CACHE STRING "" FORCE)
 
 # 只编 llama.cpp 核心库（libllama / libggml），关掉示例/测试/服务端，避免缺依赖报错
 set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
