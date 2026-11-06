@@ -39,25 +39,23 @@ set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 # GGML_NATIVE 在交叉编译（NDK）下必须 OFF，否则会按编译机的 CPU 生成指令。
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 
-# 关键提速项：为同一份 ARM64 代码编出多个指令集变体（armv8.0 / dotprod / i8mm / sve），
-# 运行时按当前 CPU 实际能力挑最快的那个。
-# 之前强制 armv8-a 基线是为了排除 SIGILL，但后来反汇编确认 .so 里根本没有
-# dotprod/i8mm/LSE/SVE 指令 —— 说明这类设备支持，白白的性能没用上。
+# 关键提速项：编出多个 CPU 指令集变体，运行时挑最快且确定支持的那一份。
 # 量化点积用上 dotprod / i8mm 通常能快 2~4 倍。
+# 之前强制 armv8-a 基线（为排查 SIGILL），代价是把这部分性能全丢了。
 # 注意：GGML_CPU_ARM_ARCH 与 GGML_CPU_ALL_VARIANTS 互斥，只能取其一。
 set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
 
 # 编译 llama.cpp 核心（fork 自带 CMakeLists，会产出 llama / ggml 等 target）
 #
-# v3.1 关键：必须让 llama/ggml 以【静态库】形式链进 libbonsai_llm.so。
-# 原因：-Wl,--wrap=abort 只对本链接单元内的未定义符号引用生效。
-# 若 ggml 编成独立的 libggml-cpu.so，那么 ggml 内部的 abort() 调用发生在
-# 那个 .so 自己的链接单元里，我们的 __wrap_abort 永远接不到 —— 白改。
-set(BUILD_SHARED_LIBS     OFF CACHE BOOL "" FORCE)
-set(GGML_SHARED           OFF CACHE BOOL "" FORCE)
-set(GGML_STATIC           ON  CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_SHARED    OFF CACHE BOOL "" FORCE)
-set(LLAMA_STATIC          ON  CACHE BOOL "" FORCE)
+# v4.0：改为动态后端（GGML_BACKEND_DL）。
+# 这样才能同时拿到"多指令集变体"和"运行时安全选择"：
+#   ggml 会为 armv8.0 / dotprod / i8mm / sve 各编一份 CPU 后端 .so，
+#   启动时读 /proc/cpuinfo 的能力位，只 dlopen 当前 CPU 真正支持的那一份。
+# 直接写死 armv8.2+dotprod 会快，但万一 CPU 不支持就是 SIGILL —— 不冒这个险。
+set(BUILD_SHARED_LIBS  ON  CACHE BOOL "" FORCE)
+set(GGML_SHARED        ON  CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SHARED ON  CACHE BOOL "" FORCE)
+set(GGML_BACKEND_DL    ON  CACHE BOOL "" FORCE)
 
 add_subdirectory(${LLAMA_DIR} llamacpp_build)
 
