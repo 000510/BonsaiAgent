@@ -27,12 +27,16 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" "ndk;26.3.11579264" "cmake;3.22.1"
 
-      - name: 克隆 PrismML llama.cpp（prism 分支，仅编译时需要）
+      - name: 克隆 PrismML llama.cpp（prism 分支）
         run: |
           cd app/src/main/cpp
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp llamacpp
+          # v5.0：换回 prism 分支。
+          # 原因：Ternary-Bonsai-8B-Q2_0 是 Prism 私有的 g128 三值布局（PQ2_0=142），
+          # 主线 llama.cpp 只有 Q2_0=42（g64），按 g64 解读会读错张量。
+          # prism 是主线的超集，标准 GGUF（Qwen 等）照样能跑，所以一个引擎通吃两类模型。
+          git clone --branch prism --depth 1 https://github.com/PrismML-Eng/llama.cpp llamacpp
           cd llamacpp
-          git submodule update --init --recursive
+          git submodule update --init --recursive || true
 
       - name: 编译 Debug APK
         uses: gradle/gradle-build-action@v3
