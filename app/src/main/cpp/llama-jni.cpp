@@ -652,30 +652,38 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         }
     }
 
-    // ---- prefill：改用官方 llama_batch_get_one 一次性提交，不再手工填字段 ----
+    // ---- v4.4 关键修复：分块 prefill，把 prompt 全部喂进去 ----
+    // 原来的写法是 "if (use_tok > 128) use_tok = 128"，等于把超过 128 token 的部分直接扔掉。
+    // 而扔掉的恰好是 prompt 末尾 —— 也就是用户的问题和 "<|im_start|>assistant" 标记。
+    // 模型根本看不到问题，只能瞎编（实测编出了中学习作里的人物"李华"）。
+    // 短句（<128 token）完全看不出问题，一带上历史会立刻暴露。
+    // 正确做法：每块不超过 n_batch，逐块 decode，位置由 context 自动续接。
     set_stage("prefill");
     log_line("prefill 开始，n_tok=%d", n_tok);
-    int use_tok = n_tok;
-    if (use_tok > 128) use_tok = 128;
     {
-        llama_batch pb = llama_batch_get_one(tokens.data(), use_tok);
-        log_line("prefill 提交 %d token，准备 llama_decode", use_tok);
-
-        // v1.17: 回滚 fork 诊断（fork 在 ART 多线程进程里会继承已锁的锁，子进程死锁）
-        auto tp0 = std::chrono::steady_clock::now();
-        int rc = llama_decode(st->ctx, pb);
-        double psec = std::chrono::duration<double>(std::chrono::steady_clock::now() - tp0).count();
-        log_line("prefill decode 返回 %d（耗时 %.2f 秒，%.1f tok/s）",
-                 rc, psec, psec > 0 ? use_tok / psec : 0.0);
-        if (rc != 0) {
-            llama_sampler_free(smpl);
-            g_lastError = "prefill 失败，ret=" + std::to_string(rc);
-            log_line("[失败] prefill ret=%d", rc);
-            set_stage("idle");
-            return env->NewStringUTF("[prefill 失败]");
+        const int64_t n_batch_max = (int64_t) llama_n_batch(st->ctx);
+        int done = 0;
+        int n_chunk = 0;
+        auto tc0 = std::chrono::steady_clock::now();
+        while (done < n_tok) {
+            int chunk = (int) std::min<int64_t>(n_tok - done, n_batch_max);
+            llama_batch cb = llama_batch_get_one(tokens.data() + done, chunk);
+            int rc = llama_decode(st->ctx, cb);
+            n_chunk++;
+            if (rc != 0) {
+                llama_sampler_free(smpl);
+                g_lastError = "prefill 第 " + std::to_string(n_chunk) + " 块失败，ret=" + std::to_string(rc);
+                log_line("[失败] prefill 第 %d 块(共 %d token) ret=%d", n_chunk, chunk, rc);
+                set_stage("idle");
+                return env->NewStringUTF("[prefill 失败]");
+            }
+            done += chunk;
         }
+        double csec = std::chrono::duration<double>(std::chrono::steady_clock::now() - tc0).count();
+        log_line("prefill 完成：%d token / %d 块 / %.2f 秒（%.1f tok/s）",
+                 n_tok, n_chunk, csec, csec > 0 ? n_tok / csec : 0.0);
     }
-    log_line("prefill 完成，可用内存 %ld MB", mem_available_mb());
+    log_line("prefill 结束后可用内存 %ld MB", mem_available_mb());
 
     // v3.4 诊断：prefill 之后 logits 到底有没有算出来。
     // 如果这里是 NULL，说明根本没产出下一个 token 的概率分布 —— 后面采样出什么都是垃圾。
@@ -696,7 +704,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     // ---- 生成 ----
     set_stage("generate");
     std::string full;
-    int n_past = use_tok;
+    int n_past = n_tok;
     char buf[512];
 
     auto tg0 = std::chrono::steady_clock::now();

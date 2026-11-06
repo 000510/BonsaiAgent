@@ -211,7 +211,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (body.isBlank()) continue
             val role = if (m.role == "user") "user" else "assistant"
             val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
-            if (estChars + piece.length > 1400) break          // 约 700 token，给回答留余量
+            if (estChars + piece.length > 900) break           // 约 900 token，给回答留出余量
             history.add(0, piece)
             estChars += piece.length
         }
