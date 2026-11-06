@@ -344,8 +344,11 @@ static void ggml_log_cb(enum ggml_log_level level, const char * text, void * /*u
         if (g_lastError.size() > kMaxErrLen) {
             g_lastError = g_lastError.substr(g_lastError.size() - kMaxErrLen);
         }
-        log_line("[llama] %s", text);
     }
+    // v4.1：所有级别都落盘（含 DEBUG）。
+    // 动态后端选型的关键信息（每个变体的 ggml_backend_score）是 DEBUG 级，
+    // 只记 ERROR 的话就看不出它到底挑了哪一份、为什么挑。
+    log_line("[llama] %s", text);
 }
 
 // v1.14：接住 ggml 的致命错误回调。
@@ -357,6 +360,8 @@ static ggml_abort_callback_t g_prev_abort_cb = nullptr;
 // Android 上 /proc/self/exe 指向 zygote，ggml 默认按它找目录必然落空，
 // 所以由 Kotlin 侧传入 applicationInfo.nativeLibraryDir。
 static bool g_backend_ready = false;
+// CPU 后端 .so 所在目录（Kotlin 侧传 applicationInfo.nativeLibraryDir）
+static char g_backendDir[512] = {0};
 
 static void ggml_fatal_cb(const char * msg) {
     log_line("[ggml FATAL] %s", msg ? msg : "(null msg)");
@@ -394,9 +399,8 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_example_bonsaiagent_llm_Llama_setBackendPath(JNIEnv* env, jobject, jstring jdir) {
     const char* d = env->GetStringUTFChars(jdir, nullptr);
     if (d) {
-        ::setenv("GGML_BACKEND_PATH", d, 1);
-        // 只记到 logcat（此时日志文件还没确定路径）
-        LOGI("GGML_BACKEND_PATH=%s", d);
+        if (strlen(d) < sizeof(g_backendDir)) snprintf(g_backendDir, sizeof(g_backendDir), "%s", d);
+        LOGI("backend 目录=%s", g_backendDir);
         env->ReleaseStringUTFChars(jdir, d);
     }
 }
@@ -405,10 +409,25 @@ Java_com_example_bonsaiagent_llm_Llama_setBackendPath(JNIEnv* env, jobject, jstr
 static void ensure_backend() {
     if (g_backend_ready) return;
     llama_backend_init();
+
+    // 关键：GGML_BACKEND_DL 模式下 llama_backend_init() 并不会自动加载后端，
+    // 必须显式扫描目录 dlopen。ggml 默认按 /proc/self/exe（Android 上是 zygote）
+    // 找同目录，必然落空，所以这里直接把 APK 的 native 库目录传进去。
+    // 它会匹配 libggml-cpu-*.so，再按文件名里的 armv8.x 版本评分挑最优的那份。
+    if (g_backendDir[0]) {
+        log_line("加载动态后端，目录=%s", g_backendDir);
+        ggml_backend_load_all_from_path(g_backendDir);
+    } else {
+        log_line("未拿到后端目录，退回默认搜索路径");
+        ggml_backend_load_all();
+    }
+
     g_backend_ready = true;
-    const char* bp = ::getenv("GGML_BACKEND_PATH");
-    log_line("backend 初始化完成，注册后端 %d 个 (GGML_BACKEND_PATH=%s)",
-             (int) ggml_backend_reg_count(), bp ? bp : "(未设置)");
+    int nreg = (int) ggml_backend_reg_count();
+    log_line("backend 初始化完成，注册后端 %d 个", nreg);
+    if (nreg == 0) {
+        g_lastError = "没有加载到任何 CPU 后端（动态库 dlopen 失败）";
+    }
 }
 
 static jlong fail(const char* stage) {
