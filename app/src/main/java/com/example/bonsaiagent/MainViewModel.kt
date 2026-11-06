@@ -199,10 +199,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         chatMessages.add(user); chatMessages.add(ai)
         val s = settings.value
         // ChatML 格式：Qwen2.5 / Qwen3(即 Ternary-Bonsai) 必须这么套，否则输出会乱
+        //
+        // v4.3：改为带上历史对话。
+        // 之前只把当前这一句丢给模型，模型天生"失忆"——你说"饿了"，它不知道你刚才
+        // 说过什么，只能给一句通用回复，看起来就像智力下降。
+        // 上下文只有 2048 token，所以只取最近若干轮，并按字符数粗估截断。
+        val history = mutableListOf<String>()
+        var estChars = 0
+        for (m in chatMessages.dropLast(1).asReversed()) {   // dropLast(1) 去掉刚加的空 assistant
+            val body = m.content.value
+            if (body.isBlank()) continue
+            val role = if (m.role == "user") "user" else "assistant"
+            val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
+            if (estChars + piece.length > 1400) break          // 约 700 token，给回答留余量
+            history.add(0, piece)
+            estChars += piece.length
+        }
         val prompt = buildString {
             append("<|im_start|>system\n")
             append("你是一个运行在手机上的本地助手，请用简洁、准确的中文回答。<|im_end|>\n")
-            append("<|im_start|>user\n").append(msg).append("<|im_end|>\n")
+            for (h in history) append(h)
             append("<|im_start|>assistant\n")
         }
         viewModelScope.launch(Dispatchers.IO) {

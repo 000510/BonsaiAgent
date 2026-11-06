@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <chrono>
+#include <random>
 #include <pthread.h>
 #include <dlfcn.h>
 #include <android/log.h>
@@ -616,19 +617,47 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     if (rep_pen > 1.0001f) {
         llama_sampler_chain_add(smpl, llama_sampler_init_penalties(n_vocab, 64, rep_pen, 0.0f, 0.0f));
     }
+    // v4.3 采样器链改成与官方 common/sampling 一致的顺序：
+    //   惩罚 → top_k → temp → top_p → dist
+    // 之前是 top_p 在 temp 前面，等于在"还没温度化"的分布上做截断，
+    // 高温时截错、低温时又过窄，输出会显得又呆又不稳定。
     if (top_k > 0) llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
+    if (temp > 0.0001f) llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
     if (top_p > 0.0f && top_p < 0.999f) {
         llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
     }
-    if (temp > 0.0001f) llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+    // v4.3：随机种子。
+    // 原来用 LLAMA_DEFAULT_SEED（固定值），同样的问句永远得到逐字相同的回答，
+    // 用起来像复读机。这里改成真正随机的种子。
+    {
+        static std::mt19937 rng{ std::random_device{}() };
+        uint32_t seed = (uint32_t) (rng() ^ (uint32_t) std::chrono::steady_clock::now().time_since_epoch().count());
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist(seed));
+    }
+
+    // ---- v4.3 关键修复：每轮生成前清空 KV cache ----
+    // 不清空的后果：上一轮的对话还留在上下文里，新 prompt 直接接在后面，
+    // 模型看到的是"[上次的问题+回答][这次的问题]"这种没有边界的内容，
+    // 于是只能回"你好！"或者"对不起，我不太明白你的意思"——
+    // 表现就是"模型突然变蠢了"。第一句永远正常，从第二句起开始崩。
+    // 这个 bug 从项目一开始就存在，只是之前崩得太早，根本没机会暴露。
+    set_stage("clear_kv");
+    {
+        llama_memory_t mem = llama_get_memory(st->ctx);
+        if (mem) {
+            llama_memory_clear(mem, true);   // true = 连数据一起清
+            log_line("已清空 KV cache（上一轮上下文不残留）");
+        } else {
+            log_line("!! 取不到 KV cache 句柄，上下文可能残留");
+        }
+    }
 
     // ---- prefill：改用官方 llama_batch_get_one 一次性提交，不再手工填字段 ----
     set_stage("prefill");
     log_line("prefill 开始，n_tok=%d", n_tok);
+    int use_tok = n_tok;
+    if (use_tok > 128) use_tok = 128;
     {
-        int use_tok = n_tok;
-        if (use_tok > 128) use_tok = 128;
         llama_batch pb = llama_batch_get_one(tokens.data(), use_tok);
         log_line("prefill 提交 %d token，准备 llama_decode", use_tok);
 
@@ -667,7 +696,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     // ---- 生成 ----
     set_stage("generate");
     std::string full;
-    int n_past = n_tok;
+    int n_past = use_tok;
     char buf[512];
 
     auto tg0 = std::chrono::steady_clock::now();
@@ -690,7 +719,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
 
         if (next < 0) { log_line("!! 采样返回负数 id=%d，中止", next); break; }
         if (llama_vocab_is_eog(vocab, next)) {
-            log_line("!! 第 %d 个 token 就是结束符 id=%d，生成 0 字", i, next);
+            log_line("!! 第 %d 个 token 遇到结束符 id=%d，本次共生成 %zu 字节", i, next, full.size());
             break;
         }
 

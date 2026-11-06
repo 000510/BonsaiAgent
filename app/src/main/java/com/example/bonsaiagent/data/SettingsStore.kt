@@ -10,10 +10,10 @@ import android.content.SharedPreferences
  */
 data class AgentSettings(
     val maxTokens: Int = 2048,
-    val temperature: Float = 0.30f,
+    val temperature: Float = 0.70f,
     val topK: Int = 40,
     val topP: Float = 0.95f,
-    val repeatPenalty: Float = 1.00f,
+    val repeatPenalty: Float = 1.10f,
     val contextSize: Int = 4096,
     val threads: Int = 4,
     val systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
@@ -32,12 +32,25 @@ class SettingsStore(context: Context) {
     private val sp: SharedPreferences =
         context.getSharedPreferences("bonsai_settings", Context.MODE_PRIVATE)
 
-    fun load(): AgentSettings = AgentSettings(
+    fun load(): AgentSettings {
+        // v4.3 参数迁移：
+        // 旧的默认值是 温度0.30 / 重复惩罚1.00 —— 对 0.5B 这种小模型太保守，
+        // 表现为回答呆板、反复说同一句。只要用户没手动改过（还是旧默认值），就升到新默认。
+        if (sp.getInt("prefsVersion", 1) < 3) {
+            val e = sp.edit()
+            if (sp.getFloat("temperature", 0.30f) <= 0.31f) e.putFloat("temperature", 0.70f)
+            if (sp.getFloat("repeatPenalty", 1.00f) <= 1.001f) e.putFloat("repeatPenalty", 1.10f)
+            e.putInt("prefsVersion", 3).apply()
+        }
+        return loadInner()
+    }
+
+    private fun loadInner(): AgentSettings = AgentSettings(
         maxTokens = sp.getInt("maxTokens", 2048),
-        temperature = sp.getFloat("temperature", 0.30f),
+        temperature = sp.getFloat("temperature", 0.70f),
         topK = sp.getInt("topK", 40),
         topP = sp.getFloat("topP", 0.95f),
-        repeatPenalty = sp.getFloat("repeatPenalty", 1.00f),
+        repeatPenalty = sp.getFloat("repeatPenalty", 1.10f),
         contextSize = sp.getInt("contextSize", 4096),
         threads = sp.getInt("threads", 4),
         systemPrompt = sp.getString("systemPrompt", DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT,
