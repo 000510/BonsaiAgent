@@ -19,6 +19,7 @@ fun ChatScreen(vm: MainViewModel) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),
@@ -26,18 +27,6 @@ fun ChatScreen(vm: MainViewModel) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(vm.chatMessages, key = { it.id }) { msg -> Bubble(msg) }
-        }
-        // v3.4：生成过程中的实时日志，卡在哪一步直接肉眼看
-        if (vm.liveLog.value.isNotBlank()) {
-            SelectionContainer {
-                Text(
-                    vm.liveLog.value,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    maxLines = 12,
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
-                )
-            }
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -56,6 +45,16 @@ fun ChatScreen(vm: MainViewModel) {
                 input = ""
             }) { Text("发送") }
         }
+    }
+
+    // 悬浮状态条：显示推理进度与速度，可拖动、可最小化
+    Box(
+        Modifier
+            .align(Alignment.TopEnd)
+            .padding(top = 8.dp, end = 8.dp)
+    ) {
+        GenStatusBar(vm)
+    }
     }
 }
 

@@ -23,6 +23,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * 推理状态（给界面上的可移动状态条用）。
+ * phase: 就绪 / 加载中 / 处理输入 / 生成中 / 完成
+ */
+data class GenStatus(
+    val phase: String = "就绪",
+    val tokPerSec: Float = 0f,
+    val tokens: Int = 0,
+    val chars: Int = 0
+)
+
 // 全局自增，保证每条消息的 id 唯一 —— LazyColumn 的 key 必须是能存进 Bundle 的简单类型
 private var chatMsgSeq = 0L
 
@@ -46,9 +57,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val modelPath = mutableStateOf(ModelLoader.currentModelPath(app))
     val modelLoaded = mutableStateOf(Llama.isLoaded())
     val status = mutableStateOf("欢迎使用 BonsaiAgent")
-    // v3.4：生成过程中的实时日志（直接读 run_log.txt 尾部）。
-    // 之前"一直省略号"却看不到任何进展，就是因为 UI 只在启动时读一次日志快照。
-    val liveLog = mutableStateOf("")
+    // v6.0：界面状态条用的实时状态（替代原来刷屏的实时日志）
+    val genStatus = mutableStateOf(GenStatus())
     val chatMessages = mutableStateListOf<ChatMessage>()
     val agentMessages = mutableStateListOf<ChatMessage>()
 
@@ -159,6 +169,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val path = modelPath.value ?: run {
             status.value = "没有可用的模型文件"; return
         }
+        genStatus.value = GenStatus(phase = "加载中")
         viewModelScope.launch(Dispatchers.IO) {
             status.value = "正在加载模型…"
             // 先修一下 GGUF 里的旧版类型标签（42/41 → 142/141），省得重下 2GB
@@ -179,6 +190,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val ok = Llama.load(path, cores, settings.value.contextSize, nativeDir)
             withContext(Dispatchers.Main) {
                 modelLoaded.value = ok
+                genStatus.value = GenStatus(phase = "就绪")
                 status.value = if (ok) {
                     if (fixed != null) "模型就绪 ✅（$fixed）" else "模型就绪 ✅"
                 } else {
@@ -221,26 +233,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             for (h in history) append(h)
             append("<|im_start|>assistant\n")
         }
+        genStatus.value = GenStatus(phase = "处理输入")
         viewModelScope.launch(Dispatchers.IO) {
             val buf = StringBuilder()
+            val t0 = System.currentTimeMillis()
+            var firstTokAt = 0L
+            var tokCount = 0
             // 推理要用大栈线程：llama.cpp 的计算在调用线程栈上跑，默认 1MB 容易溢出
             val worker = Thread(null, Runnable {
                 Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
                     buf.append(it)
+                    tokCount++
+                    // 速度只从"第一个字出来之后"开始算，否则会把 prefill 时间摊进去，显得很慢
+                    if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()
                     val txt = buf.toString()
-                    mainHandler.post { ai.content.value = txt }
+                    val sec = (System.currentTimeMillis() - firstTokAt) / 1000.0
+                    val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
+                    val snap = GenStatus("生成中", speed, tokCount, txt.length)
+                    mainHandler.post {
+                        ai.content.value = txt
+                        genStatus.value = snap
+                    }
                 }
             }, "llama-gen")   // v2.2: 回退自定义栈大小(32MB)，用默认栈
             worker.start()
-            // v3.4：生成期间持续把 native 日志尾部刷到界面上，
-            // 这样"卡在哪一步"一眼就能看到，不用再靠猜。
-            while (worker.isAlive) {
-                val t = readLogTail()
-                mainHandler.post { liveLog.value = t }
-                delay(600)
-            }
-            val t = readLogTail()
-            mainHandler.post { liveLog.value = t }
+            worker.join()
+            val st = genStatus.value
+            mainHandler.post { genStatus.value = st.copy(phase = "完成") }
         }
     }
 
@@ -259,23 +278,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             append("<|im_start|>user\n").append(msg).append("<|im_end|>\n")
             append("<|im_start|>assistant\n")
         }
+        genStatus.value = GenStatus(phase = "处理输入")
         viewModelScope.launch(Dispatchers.IO) {
             val raw = StringBuilder()
+            var firstTokAt = 0L
+            var tokCount = 0
             val worker = Thread(null, Runnable {
                 Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
                     raw.append(it)
+                    tokCount++
+                    if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()
                     val txt = raw.toString()
-                    mainHandler.post { ai.content.value = txt }
+                    val sec = (System.currentTimeMillis() - firstTokAt) / 1000.0
+                    val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
+                    val snap = GenStatus("生成中", speed, tokCount, txt.length)
+                    mainHandler.post {
+                        ai.content.value = txt
+                        genStatus.value = snap
+                    }
                 }
             }, "llama-gen")   // v2.2: 回退自定义栈大小(32MB)，用默认栈
             worker.start()
-            while (worker.isAlive) {
-                val t = readLogTail()
-                mainHandler.post { liveLog.value = t }
-                delay(600)
-            }
-            val t = readLogTail()
-            mainHandler.post { liveLog.value = t }
+            worker.join()
+            mainHandler.post { genStatus.value = genStatus.value.copy(phase = "完成") }
             // 解析路由指令
             when (val route = Router.parse(ai.content.value)) {
                 is RouteResult.Cloud -> {
