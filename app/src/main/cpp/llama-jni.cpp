@@ -592,6 +592,22 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     }
     log_line("prefill 完成，可用内存 %ld MB", mem_available_mb());
 
+    // v3.4 诊断：prefill 之后 logits 到底有没有算出来。
+    // 如果这里是 NULL，说明根本没产出下一个 token 的概率分布 —— 后面采样出什么都是垃圾。
+    {
+        float* lg = llama_get_logits_ith(st->ctx, -1);
+        if (!lg) {
+            log_line("!! prefill 后 logits 为 NULL（没有输出层结果）");
+        } else {
+            int best = 0; float bv = lg[0];
+            for (int v = 1; v < n_vocab; v++) { if (lg[v] > bv) { bv = lg[v]; best = v; } }
+            char pb[64] = {0};
+            int pl = llama_token_to_piece(vocab, best, pb, (int32_t) sizeof(pb) - 1, 0, false);
+            log_line("prefill 后 argmax id=%d logit=%.3f piece=[%.*s]", best, bv,
+                     pl > 0 ? pl : 0, pl > 0 ? pb : "");
+        }
+    }
+
     // ---- 生成 ----
     set_stage("generate");
     std::string full;
@@ -603,8 +619,21 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             log_line("生成中… 第 %d 个 token，可用内存 %ld MB", i, mem_available_mb());
         }
         llama_token next = llama_sampler_sample(smpl, st->ctx, -1);
-        if (next < 0) break;
-        if (llama_vocab_is_eog(vocab, next)) break;
+
+        // v3.4 诊断：前 6 个 token 全部记下来，看清是"结束符"还是"空 piece"
+        if (i < 6) {
+            int is_eog = llama_vocab_is_eog(vocab, next);
+            char db[64] = {0};
+            int dl = llama_token_to_piece(vocab, next, db, (int32_t) sizeof(db) - 1, 0, false);
+            log_line("token[%d] id=%d eog=%d piece_len=%d piece=[%.*s]",
+                     i, next, is_eog, dl, dl > 0 ? dl : 0, dl > 0 ? db : "");
+        }
+
+        if (next < 0) { log_line("!! 采样返回负数 id=%d，中止", next); break; }
+        if (llama_vocab_is_eog(vocab, next)) {
+            log_line("!! 第 %d 个 token 就是结束符 id=%d，生成 0 字", i, next);
+            break;
+        }
 
         int len = llama_token_to_piece(vocab, next, buf, (int32_t) sizeof(buf), 0, false);
         if (len > 0) {

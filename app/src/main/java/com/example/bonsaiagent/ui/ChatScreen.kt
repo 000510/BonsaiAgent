@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,6 +26,18 @@ fun ChatScreen(vm: MainViewModel) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(vm.chatMessages, key = { it.id }) { msg -> Bubble(msg) }
+        }
+        // v3.4：生成过程中的实时日志，卡在哪一步直接肉眼看
+        if (vm.liveLog.value.isNotBlank()) {
+            SelectionContainer {
+                Text(
+                    vm.liveLog.value,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 12,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                )
+            }
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),

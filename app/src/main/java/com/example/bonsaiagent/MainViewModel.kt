@@ -19,6 +19,7 @@ import com.example.bonsaiagent.llm.GgufTypeFixer
 import com.example.bonsaiagent.llm.Llama
 import com.example.bonsaiagent.llm.ModelLoader
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -45,6 +46,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val modelPath = mutableStateOf(ModelLoader.currentModelPath(app))
     val modelLoaded = mutableStateOf(Llama.isLoaded())
     val status = mutableStateOf("欢迎使用 BonsaiAgent")
+    // v3.4：生成过程中的实时日志（直接读 run_log.txt 尾部）。
+    // 之前"一直省略号"却看不到任何进展，就是因为 UI 只在启动时读一次日志快照。
+    val liveLog = mutableStateOf("")
     val chatMessages = mutableStateListOf<ChatMessage>()
     val agentMessages = mutableStateListOf<ChatMessage>()
 
@@ -91,6 +95,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }, "logcat-dump").start()
     }
+
+    /** 读 run_log.txt 尾部若干行 */
+    private fun readLogTail(n: Int = 14): String = try {
+        val f = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
+        if (!f.exists()) "" else f.readLines().takeLast(n).joinToString("\n")
+    } catch (e: Throwable) { "" }
 
     /**
      * 读自己进程的 logcat（Android 允许 app 读自己 uid 的日志）。
@@ -199,7 +209,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }, "llama-gen")   // v2.2: 回退自定义栈大小(32MB)，用默认栈
             worker.start()
-            worker.join()
+            // v3.4：生成期间持续把 native 日志尾部刷到界面上，
+            // 这样"卡在哪一步"一眼就能看到，不用再靠猜。
+            while (worker.isAlive) {
+                val t = readLogTail()
+                mainHandler.post { liveLog.value = t }
+                delay(600)
+            }
+            val t = readLogTail()
+            mainHandler.post { liveLog.value = t }
         }
     }
 
@@ -228,7 +246,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }, "llama-gen")   // v2.2: 回退自定义栈大小(32MB)，用默认栈
             worker.start()
-            worker.join()
+            while (worker.isAlive) {
+                val t = readLogTail()
+                mainHandler.post { liveLog.value = t }
+                delay(600)
+            }
+            val t = readLogTail()
+            mainHandler.post { liveLog.value = t }
             // 解析路由指令
             when (val route = Router.parse(ai.content.value)) {
                 is RouteResult.Cloud -> {
