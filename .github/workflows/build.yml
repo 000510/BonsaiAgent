@@ -41,9 +41,11 @@ jobs:
           echo "NDK vulkan.h 版本: $NDKVK"
           # 不能直接拷主机的 vulkan.hpp —— 它对 vulkan.h 有严格的版本断言
           # （实测 237 vs 341 直接 static_assert 失败）。必须取同版本。
-          curl -sfL -o /tmp/vk.hpp "https://raw.githubusercontent.com/KhronosGroup/Vulkan-Hpp/v1.3.${NDKVK}/vulkan/vulkan.hpp" && sudo cp /tmp/vk.hpp $NINCDIR/vulkan/vulkan.hpp && echo "已下载匹配版本 vulkan.hpp"
-          grep -m1 "VK_HEADER_VERSION " $NINCDIR/vulkan/vulkan.hpp || true
-          ls $NINCDIR/vulkan/ | head -8
+          # v1.3.237 的 Vulkan-Hpp 已拆成多个子头文件（vulkan_enums.hpp 等），单拉 vulkan.hpp 不够
+          curl -sfL -o /tmp/hpp.tgz "https://github.com/KhronosGroup/Vulkan-Hpp/archive/refs/tags/v1.3.${NDKVK}.tar.gz"
+          tar xzf /tmp/hpp.tgz -C /tmp
+          sudo cp /tmp/Vulkan-Hpp-1.3.${NDKVK}/vulkan/*.hpp $NINCDIR/vulkan/ && echo "已补齐 Vulkan-Hpp 全套头文件"
+          ls $NINCDIR/vulkan/
 
       - name: 克隆 PrismML llama.cpp（prism 分支）
         run: |
