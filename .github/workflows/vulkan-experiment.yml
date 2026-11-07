@@ -42,15 +42,17 @@ jobs:
           grep -m1 "VK_HEADER_VERSION " "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan/vulkan_core.h" || true
           ls "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan/" | head
 
-      - name: 装 cmake / ninja / glslc
+      - name: 检查工具链（完全不用 apt）
         run: |
-          # 只用确定存在的包。vulkan-headers / spirv-headers 在部分 Ubuntu 版本没有，
-          # 装它们会让整条 apt 命令失败 —— 头文件我们自己下，不依赖系统包。
-          sudo apt-get update -qq || true
-          sudo apt-get install -y -qq ninja-build glslang-tools cmake unzip wget
+          # GitHub runner 自带 cmake / ninja / unzip。
+          # glslc 用 NDK 自带的 —— r26 以后 NDK 就打包了 shader 工具，
+          # 之前非要 apt 装 glslang-tools，白白多一个失败点。
           cmake --version | head -1
-          glslc --version | head -1
           ninja --version
+          GLSLC="$ANDROID_NDK/shader-tools/linux-x86_64/glslc"
+          ls -l "$GLSLC"
+          "$GLSLC" --version | head -2
+          echo "GLSLC=$GLSLC" >> $GITHUB_ENV
 
       - name: 下载匹配版本的 Vulkan-Headers + SPIRV-Headers
         run: |
@@ -98,7 +100,7 @@ jobs:
             -DGGML_LLAMAFILE=ON \
             -DCMAKE_CXX_FLAGS="-I$VULKAN_INCLUDE" \
             -DCMAKE_C_FLAGS="-I$VULKAN_INCLUDE" \
-            -DVulkan_GLSLC_EXECUTABLE=$(which glslc) \
+            -DVulkan_GLSLC_EXECUTABLE=$GLSLC \
             -DVulkan_INCLUDE_DIR=$VULKAN_INCLUDE \
             -DVulkanHeaders_DIR=$VULKAN_INCLUDE \
             -DSPIRV-Headers_DIR=$SPIRV_DIR \
