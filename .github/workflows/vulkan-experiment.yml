@@ -1,0 +1,105 @@
+name: vulkan-experiment
+
+# 独立实验：只验证「llama.cpp 的 Vulkan 后端能不能给 Android arm64 编出来」，
+# 不碰主构建流程，不影响任何已发布版本。
+#
+# 背景（上一轮六次失败的原因，全部记在这里，别再踩）：
+#   1. NDK r26 自带 vulkan_core.h 是 1.3.237
+#   2. llama.cpp 新代码用到 VkPhysicalDeviceCooperativeMatrixFeaturesKHR、
+#      LayerSettingEXT 等 1.3.258+ 才有的类型 → 编译直接挂
+#   → 结论：必须换 NDK r27（自带 1.3.290）+ 匹配版本的 vulkan.hpp + SPIRV 头
+on:
+  workflow_dispatch:
+    inputs:
+      ndk_version:
+        description: 'NDK version'
+        required: true
+        default: '27.2.12479018'
+      vk_version:
+        description: 'Vulkan-Headers tag (must match NDK header)'
+        required: true
+        default: 'v1.3.290'
+
+jobs:
+  build-vulkan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 装 NDK r27（关键：r26 的 Vulkan 头太老）
+        run: |
+          NDK_VER="${{ inputs.ndk_version }}"
+          wget -q "https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip"
+          unzip -q "android-ndk-${NDK_VER}-linux.zip"
+          echo "ANDROID_NDK=$PWD/android-ndk-${NDK_VER}" >> $GITHUB_ENV
+          echo "--- 确认 NDK 里的 Vulkan 头版本 ---"
+          grep -m1 "VK_HEADER_VERSION " "$PWD/android-ndk-${NDK_VER}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan/vulkan_core.h" || true
+
+      - name: 装 cmake / ninja / glslc
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build glslang-tools libvulkan-dev vulkan-headers spirv-headers
+          cmake --version | head -1
+          glslc --version | head -1
+
+      - name: 下载匹配版本的 Vulkan-Headers（提供 vulkan.hpp）
+        run: |
+          VK="${{ inputs.vk_version }}"
+          wget -q "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/${VK}.tar.gz" -O vk.tar.gz
+          tar xzf vk.tar.gz
+          VKDIR="$PWD/Vulkan-Headers-${VK#v}"
+          echo "VULKAN_INCLUDE=$VKDIR/include" >> $GITHUB_ENV
+          ls "$VKDIR/include/vulkan" | head
+          echo "--- 版本号 ---"
+          grep -m2 "VK_HEADER_VERSION" "$VKDIR/include/vulkan/vulkan_core.h"
+
+      - name: 克隆 llama.cpp（prism 分支，和 App 用的一致）
+        run: |
+          git clone --depth 1 -b prism https://github.com/PrismML-Eng/llama.cpp.git llama.cpp || \
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git llama.cpp
+          cd llama.cpp
+          git log --oneline -1
+
+      - name: 打 sgemm 补丁（和正式构建保持一致，避免形状断言）
+        run: python3 "$GITHUB_WORKSPACE/tools/patch_sgemm.py" llama.cpp/ggml/src/ggml-cpu/llamafile/sgemm.cpp
+
+      - name: CMake 配置（Vulkan 开，指向自定义头）
+        run: |
+          cd llama.cpp
+          cmake -B build-android -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_VULKAN=ON \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DGGML_LLAMAFILE=ON \
+            -DCMAKE_CXX_FLAGS="-I$VULKAN_INCLUDE" \
+            -DCMAKE_C_FLAGS="-I$VULKAN_INCLUDE" \
+            -DVulkan_GLSLC_EXECUTABLE=$(which glslc) \
+            -DVulkan_INCLUDE_DIR=$VULKAN_INCLUDE \
+            -DVulkanHeaders_DIR=$VULKAN_INCLUDE \
+            -DSPIRV-Headers_DIR=/usr \
+            2>&1 | tail -40
+
+      - name: 编译
+        run: |
+          cd llama.cpp
+          cmake --build build-android --target ggml-vulkan -- -j$(nproc) 2>&1 | tail -40
+
+      - name: 检查产物
+        run: |
+          find llama.cpp/build-android -name "*.so" -o -name "*vulkan*" | head -20
+          SO=$(find llama.cpp/build-android -name "libggml-vulkan.so" | head -1)
+          if [ -n "$SO" ]; then
+            echo "SUCCESS: $SO"
+            file "$SO"
+            ls -lh "$SO"
+          else
+            echo "::error::没编出 libggml-vulkan.so"
+            exit 1
+          fi
