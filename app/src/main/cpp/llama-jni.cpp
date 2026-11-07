@@ -378,6 +378,13 @@ static void ggml_fatal_cb(const char * msg) {
 struct LlamaState {
     llama_model*   model;
     llama_context* ctx;
+
+    // v8.0 KV 前缀缓存（"汤底复用"）：
+    // system prompt 每轮完全相同，却要每轮重新 prefill —— 实测占单轮 15 秒里的 14 秒。
+    // 这里把它的 KV 状态算一次存下来，之后每轮直接恢复，只需处理用户那一小段。
+    std::string          sysText;    // 上次缓存的 system 前缀原文
+    std::vector<uint8_t> sysKv;      // 对应的 KV 快照
+    int                  sysTokLen = 0;
 };
 
 static JavaVM*   g_vm       = nullptr;
@@ -638,7 +645,7 @@ Java_com_example_bonsaiagent_llm_Llama_setCallback(JNIEnv* env, jobject, jobject
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_bonsaiagent_llm_Llama_generate(
         JNIEnv* env, jobject,
-        jlong handle, jstring jprompt,
+        jlong handle, jstring jsysPrefix, jstring jprompt,
         jfloat temp, jint top_k, jfloat top_p, jfloat rep_pen, jint max_tokens) {
 
     auto* st = reinterpret_cast<LlamaState*>(handle);
@@ -673,6 +680,10 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
                  feat.empty() ? "(读不到)" : feat.c_str());
     }
 
+    const char* cpre = env->GetStringUTFChars(jsysPrefix, nullptr);
+    std::string sysPrefix(cpre ? cpre : "");
+    env->ReleaseStringUTFChars(jsysPrefix, cpre);
+
     const char* cprompt = env->GetStringUTFChars(jprompt, nullptr);
     std::string prompt(cprompt ? cprompt : "");
     env->ReleaseStringUTFChars(jprompt, cprompt);
@@ -700,6 +711,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     log_line("prompt %d tokens", n_tok);
 
     const int n_ctx = (int) llama_n_ctx(st->ctx);
+    int n_past_base = 0;   // 前缀缓存已占用的 token 数（KV 段会赋值）
     int room = n_ctx - 8;
     if (n_tok > room) {
         n_tok = room;
@@ -708,7 +720,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     }
 
     int budget = max_tokens > 0 ? max_tokens : 2048;
-    int left = n_ctx - n_tok - 1;
+    int left = n_ctx - n_tok - n_past_base - 1;
     if (budget > left) budget = left;
     if (budget <= 0) return env->NewStringUTF("[上下文不够，先清空对话或调大上下文]");
 
@@ -747,20 +759,92 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         llama_sampler_chain_add(smpl, llama_sampler_init_dist(seed));
     }
 
-    // ---- v4.3 关键修复：每轮生成前清空 KV cache ----
-    // 不清空的后果：上一轮的对话还留在上下文里，新 prompt 直接接在后面，
-    // 模型看到的是"[上次的问题+回答][这次的问题]"这种没有边界的内容，
-    // 于是只能回"你好！"或者"对不起，我不太明白你的意思"——
-    // 表现就是"模型突然变蠢了"。第一句永远正常，从第二句起开始崩。
-    // 这个 bug 从项目一开始就存在，只是之前崩得太早，根本没机会暴露。
-    set_stage("clear_kv");
+    // ---- v8.0：KV 前缀缓存（"汤底复用"）----
+    //
+    // 背景：system prompt 每轮完全相同，实测占单轮 15 秒里的 14 秒。
+    // 既然算过一次，就把它的 KV 状态存下来，之后直接恢复，
+    // 只处理用户那一小段 —— 这是唯一能让 8B 在手机上"秒回"的办法。
+    //
+    // 两种模式：
+    //   sysPrefix 非空 → 缓存模式（Agent 页用）：前缀算一次，之后恢复
+    //   sysPrefix 为空 → 旧行为（对话页用）：整段 prompt 一起 prefill
+    set_stage("kv");
+    const bool useCache = !sysPrefix.empty();
     {
         llama_memory_t mem = llama_get_memory(st->ctx);
-        if (mem) {
-            llama_memory_clear(mem, true);   // true = 连数据一起清
-            log_line("已清空 KV cache（上一轮上下文不残留）");
+        if (!useCache) {
+            if (mem) llama_memory_clear(mem, true);
+            log_line("已清空 KV cache（整段 prompt 一起处理）");
+        } else if (st->sysKv.empty() || st->sysText != sysPrefix) {
+            // 首次或前缀变了：算一遍并存快照
+            if (mem) llama_memory_clear(mem, true);
+
+            int needP = llama_tokenize(vocab, sysPrefix.c_str(), (int) sysPrefix.size(),
+                                       nullptr, 0, true, true);
+            if (needP < 0) needP = -needP;
+            std::vector<llama_token> pre((size_t) needP + 8);
+            int nPre = llama_tokenize(vocab, sysPrefix.c_str(), (int) sysPrefix.size(),
+                                      pre.data(), (int) pre.size(), true, true);
+            if (nPre <= 0) {
+                log_line("!! system 前缀 tokenize 失败 %d", nPre);
+            } else {
+                pre.resize((size_t) nPre);
+                auto tp = std::chrono::steady_clock::now();
+                const int64_t nb = (int64_t) llama_n_batch(st->ctx);
+                int done = 0;
+                int rc = 0;
+                while (done < nPre) {
+                    int chunk = (int) std::min<int64_t>(nPre - done, nb);
+                    llama_batch pb = llama_batch_get_one(pre.data() + done, chunk);
+                    rc = llama_decode(st->ctx, pb);
+                    if (rc != 0) break;
+                    done += chunk;
+                }
+                double psec = std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - tp).count();
+                if (rc != 0) {
+                    log_line("[失败] 前缀 prefill ret=%d", rc);
+                } else {
+                    size_t sz = llama_state_seq_get_size(st->ctx, 0);
+                    st->sysKv.resize(sz);
+                    size_t got = llama_state_seq_get_data(st->ctx, st->sysKv.data(), sz, 0);
+                    st->sysText   = sysPrefix;
+                    st->sysTokLen = nPre;
+                    log_line("建立前缀缓存：%d token / %.2f 秒 / %.1f MB（只这一次）",
+                             nPre, psec, got / 1048576.0);
+                }
+            }
         } else {
-            log_line("!! 取不到 KV cache 句柄，上下文可能残留");
+            // 已有快照：清空后恢复，跳过前缀计算
+            if (mem) llama_memory_clear(mem, true);
+            auto tr = std::chrono::steady_clock::now();
+            size_t r = llama_state_seq_set_data(st->ctx, st->sysKv.data(), st->sysKv.size(), 0);
+            double rsec = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - tr).count();
+            if (r == 0) {
+                log_line("!! 前缀快照恢复失败，本轮退回完整计算");
+                st->sysKv.clear();
+                if (mem) llama_memory_clear(mem, true);
+            } else {
+                log_line("恢复前缀缓存：%d token / %.3f 秒（省掉一次完整 prefill）",
+                         st->sysTokLen, rsec);
+            }
+        }
+        n_past_base = st->sysTokLen > 0 && !st->sysKv.empty() ? st->sysTokLen : 0;
+        if (useCache && st->sysKv.empty()) n_past_base = 0;
+    }
+
+    // 前缀占了 n_past_base 个位置，前面那次 budget 计算是在"前缀为 0"的前提下做的，
+    // 这里按真实占用重新校准，避免生成到一半撞上上下文上限被截断。
+    {
+        int left2 = n_ctx - n_tok - n_past_base - 1;
+        if (budget > left2) budget = left2;
+        if (budget <= 0) {
+            llama_sampler_free(smpl);
+            g_lastError = "上下文不够（前缀 " + std::to_string(n_past_base) +
+                          " + 输入 " + std::to_string(n_tok) + " 已占满）";
+            set_stage("idle");
+            return env->NewStringUTF("[上下文不够]");
         }
     }
 
@@ -816,7 +900,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     // ---- 生成 ----
     set_stage("generate");
     std::string full;
-    int n_past = n_tok;
+    int n_past = n_past_base + n_tok;
     char buf[512];
 
     auto tg0 = std::chrono::steady_clock::now();

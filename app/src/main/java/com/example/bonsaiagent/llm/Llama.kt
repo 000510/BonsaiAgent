@@ -34,8 +34,9 @@ object Llama {
 
     /** 最近一次原生错误详情（加载失败时给界面显示真实原因） */
     fun getLastError(): String = try { lastError() } catch (e: Throwable) { "" }
-    private external fun generate(handle: Long, prompt: String, temp: Float, topK: Int,
-                                  topP: Float, repPen: Float, maxTokens: Int): String
+    private external fun generate(handle: Long, sysPrefix: String, prompt: String,
+                                  temp: Float, topK: Int, topP: Float, repPen: Float,
+                                  maxTokens: Int): String
     private external fun freeNative(handle: Long)
 
     fun isLoaded(): Boolean = handle != 0L
@@ -67,10 +68,15 @@ object Llama {
      * 同步生成完整文本，过程中通过 onPiece 流式回调。
      * 注意：本函数会阻塞调用线程直到生成结束。
      */
-    fun generate(prompt: String, temp: Float, topK: Int, topP: Float, repPen: Float,
-                 maxTokens: Int, onPiece: (String) -> Unit): String {
+    /**
+     * @param sysPrefix 固定前缀（system prompt 部分）。非空时会被 KV 缓存复用：
+     *                  第一次算完存快照，之后每轮直接恢复，省掉重复的 prefill。
+     *                  传空字符串就是旧行为（整段 prompt 一起算）。
+     */
+    fun generate(sysPrefix: String, prompt: String, temp: Float, topK: Int, topP: Float,
+                 repPen: Float, maxTokens: Int, onPiece: (String) -> Unit): String {
         pieceSink = onPiece
-        return generate(handle, prompt, temp, topK, topP, repPen, maxTokens)
+        return generate(handle, sysPrefix, prompt, temp, topK, topP, repPen, maxTokens)
     }
 
     fun unload() {

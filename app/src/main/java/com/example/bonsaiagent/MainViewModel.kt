@@ -341,7 +341,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var tokCount = 0
             // 推理要用大栈线程：llama.cpp 的计算在调用线程栈上跑，默认 1MB 容易溢出
             val worker = Thread(null, Runnable {
-                Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
+                Llama.generate("", prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
                     buf.append(it)
                     tokCount++
                     // 速度只从"第一个字出来之后"开始算，否则会把 prefill 时间摊进去，显得很慢
@@ -408,9 +408,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
+        // v8.0：把 prompt 拆成"固定前缀"和"变化部分"。
+        // 前缀（system）每轮完全一样，交给 native 层做 KV 缓存复用；
+        // 历史放进变化部分 —— 否则前缀一变，缓存就失效了。
+        val sysPrefix = "<|im_start|>system\n" + sysAgent + "<|im_end|>\n"
         val prompt = buildString {
-            append("<|im_start|>system\n").append(sysAgent).append("<|im_end|>\n")
             for (h in aHistory) append(h)
+            append("<|im_start|>user\n").append(msg).append("<|im_end|>\n")
             append("<|im_start|>assistant\n")
             append("<think>\n\n</think>\n")
         }
@@ -420,7 +424,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var firstTokAt = 0L
             var tokCount = 0
             val worker = Thread(null, Runnable {
-                Llama.generate(prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
+                Llama.generate(sysPrefix, prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
                     raw.append(it)
                     tokCount++
                     if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()
