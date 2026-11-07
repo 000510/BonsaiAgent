@@ -377,22 +377,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // v7.0：跟对话页对齐——带上最近几轮历史，并跳过 <think> 思考。
         // 路由判断是"看一眼决定走哪条路"，让它思考 200 个 token 纯属浪费
         //（实测要等 30 秒，还进过崩溃路径）。
-        val aHistory = mutableListOf<String>()
-        var aChars = 0
-        for (m in agentMessages.dropLast(1).asReversed()) {
-            val body = m.content.value
-            if (body.isBlank()) continue
-            val role = if (m.role == "user") "user" else "assistant"
-            val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
-            if (aChars + piece.length > 200) break   // v7.4：Agent 每轮基本独立，历史压到 200 字符，prefill 少一半
-            aHistory.add(0, piece)
-            aChars += piece.length
-        }
+        // v8.1：Agent 不再拼接历史（每轮独立判断，省下的 prefill 时间非常可观）
         // v7.2：把真实时间写进 system，模型自己不知道现在几点（实测会编出 2023 年的日期）
         val nowStr = java.text.SimpleDateFormat(
             "yyyy年M月d日 EEEE HH:mm", java.util.Locale.CHINA
         ).format(java.util.Date())
-        val sysAgent = s.systemPrompt + "\n当前时间：" + nowStr
+        // 注意：时间绝对不能放进 sysPrefix —— 它每过一分钟就变，
+        // 会导致 KV 前缀缓存每轮失效（实测表现为 18→20→24 秒越来越慢）。
+        // 时间改放到用户消息里，前缀就彻底固定了。
+        val sysAgent = s.systemPrompt
 
         // v7.5 快路径：高频短指令直接命中，不经过模型。
         // 实测这类指令占 prefill 33 秒的绝大部分，而意图是确定的，查表就够。
@@ -413,8 +406,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 历史放进变化部分 —— 否则前缀一变，缓存就失效了。
         val sysPrefix = "<|im_start|>system\n" + sysAgent + "<|im_end|>\n"
         val prompt = buildString {
-            for (h in aHistory) append(h)
-            append("<|im_start|>user\n").append(msg).append("<|im_end|>\n")
+            // v8.1：Agent 每轮独立判断，不带历史 —— 历史会让每轮 prefill 越来越长
+            // （实测 18→20→24 秒的递增就是它 + 缓存失效共同造成的）。
+            append("<|im_start|>user\n[现在 ").append(nowStr).append("] ").append(msg).append("<|im_end|>\n")
             append("<|im_start|>assistant\n")
             append("<think>\n\n</think>\n")
         }
