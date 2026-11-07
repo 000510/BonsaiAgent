@@ -535,8 +535,10 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     if (want_ctx > 2048u) want_ctx = 2048u;   // 4096 时 KV cache 约 600MB，手机扛不住
     if (want_ctx < 512u)  want_ctx = 512u;
     cparams.n_ctx           = want_ctx;
-    cparams.n_batch         = 128;
-    cparams.n_ubatch        = 64;
+    // v6.2：加大微批。prefill 是批量矩阵乘，ubatch 越大，矩阵乘的 n 维越大、
+    // 硬件利用率越高。8B 模型下 compute buffer 从 42MB 涨到约 84MB，内存扛得住。
+    cparams.n_batch         = 256;
+    cparams.n_ubatch        = 128;
     cparams.n_threads       = (uint32_t) (n_threads > 0 ? n_threads : 4);
     cparams.n_threads_batch = cparams.n_threads;
     // 主线版本该字段名/枚举可能不同，用默认值（AUTO）即可
@@ -592,6 +594,26 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     g_lastError.clear();
     set_stage("tokenize");
     log_line("----- generate 开始，可用内存 %ld MB -----", mem_available_mb());
+
+    // v6.2：再打一次 CPU 指令集能力。
+    // 原来只在 init 时打，会被后续大量日志挤到列表最前面，界面只看最后 30 行，
+    // 用户根本截不到。这里每次生成前打一行，保证可见。
+    {
+        std::string feat;
+        FILE* f = fopen("/proc/cpuinfo", "r");
+        if (f) {
+            char line[4096];
+            while (fgets(line, sizeof(line), f)) {
+                if (strncmp(line, "Features", 8) == 0) { feat = line; break; }
+            }
+            fclose(f);
+        }
+        auto has = [&](const char* k) { return feat.find(k) != std::string::npos; };
+        log_line("CPU: dotprod=%d i8mm=%d sve=%d fp16=%d | %s",
+                 has("asimddp") ? 1 : 0, has("i8mm") ? 1 : 0,
+                 has("sve") ? 1 : 0, has("asimdhp") ? 1 : 0,
+                 feat.empty() ? "(读不到)" : feat.c_str());
+    }
 
     const char* cprompt = env->GetStringUTFChars(jprompt, nullptr);
     std::string prompt(cprompt ? cprompt : "");

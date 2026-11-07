@@ -246,7 +246,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val prompt = buildString {
             append("<|im_start|>system\n")
-            append("你是一个运行在手机上的本地助手，请用简洁、准确的中文回答。<|im_end|>\n")
+            append("你是手机本地助手，回答简洁准确。<|im_end|>\n")
             for (h in history) append(h)
             append("<|im_start|>assistant\n")
         }
