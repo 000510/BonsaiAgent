@@ -23,36 +23,36 @@ object Executor {
     /** 明确危险：删除、格式化、提权、卸载、关机、管道执行远程脚本 */
     private val DANGEROUS = listOf(
         // 删除：rm 带 -r 或指向根/家目录/通配符
-        Regex("""(^|[\s;&|])rm\s+(-[^\s]*\s+)*.*(-[rR]|--recursive)"""),
-        Regex("""(^|[\s;&|])rm\s+(-[^\s]*\s+)*(/|~|\*|/\*)"""),
-        Regex("""(^|[\s;&|])rmdir\s+(-[^\s]*\s+)*/"""),
+        Regex("(^|[\\s;&|])rm\\s+(-[^\\s]*\\s+)*.*(-[rR]|--recursive)"),
+        Regex("(^|[\\s;&|])rm\\s+(-[^\\s]*\\s+)*(/|~|\\*|/\\*)"),
+        Regex("(^|[\\s;&|])rmdir\\s+(-[^\\s]*\\s+)*/"),
         // 磁盘/文件系统
-        Regex("""(^|[\s;&|])(mkfs|mke2fs|fdisk|parted)\b"""),
-        Regex("""(^|[\s;&|])dd\s+.*\bof="""),
-        Regex("""(^|[\s;&|])format\b"""),
-        Regex(""">\s*/dev/"""),
+        Regex("(^|[\\s;&|])(mkfs|mke2fs|fdisk|parted)\\b"),
+        Regex("(^|[\\s;&|])dd\\s+.*\\bof="),
+        Regex("(^|[\\s;&|])format\\b"),
+        Regex(">\\s*/dev/"),
         // 提权
-        Regex("""(^|[\s;&|])(su|sudo)\b"""),
+        Regex("(^|[\\s;&|])(su|sudo)\\b"),
         // 包管理 / 系统控制
-        Regex("""(^|[\s;&|])pm\s+(uninstall|clear|disable)"""),
-        Regex("""(^|[\s;&|])am\s+(force-stop|kill)"""),
-        Regex("""(^|[\s;&|])(reboot|shutdown|poweroff|halt)\b"""),
+        Regex("(^|[\\s;&|])pm\\s+(uninstall|clear|disable)"),
+        Regex("(^|[\\s;&|])am\\s+(force-stop|kill)"),
+        Regex("(^|[\\s;&|])(reboot|shutdown|poweroff|halt)\\b"),
         // 远程脚本直接执行
-        Regex("""(curl|wget|nc)\b[^\n]*\|\s*(sh|bash|python|node)"""),
+        Regex("(curl|wget|nc)\\b[^\\n]*\\|\\s*(sh|bash|python|node)"),
         // 其他高危
-        Regex("""(^|[\s;&|])wipe\b"""),
-        Regex("""(^|[\s;&|])chmod\s+(-[^\s]*\s+)*777\s+/"""),
-        Regex(""":\(\)\s*\{""")   // fork 炸弹
+        Regex("(^|[\\s;&|])wipe\\b"),
+        Regex("(^|[\\s;&|])chmod\\s+(-[^\\s]*\\s+)*777\\s+/"),
+        Regex(":\\(\\)\\s*\\{")   // fork 炸弹
     )
 
     /** 敏感但常见：写文件、改权限、下载。允许执行，但标注一下 */
     private val SENSITIVE = listOf(
-        Regex("""(^|[\s;&|])rm\b"""),
-        Regex("""(^|[\s;&|])(mv|cp)\b"""),
-        Regex("""(^|[\s;&|])chmod\b"""),
-        Regex("""(^|[\s;&|])(curl|wget)\b"""),
-        Regex("""(^|[\s;&|])pm\s+install"""),
-        Regex(""">\s*""")
+        Regex("(^|[\\s;&|])rm\\b"),
+        Regex("(^|[\\s;&|])(mv|cp)\\b"),
+        Regex("(^|[\\s;&|])chmod\\b"),
+        Regex("(^|[\\s;&|])(curl|wget)\\b"),
+        Regex("(^|[\\s;&|])pm\\s+install"),
+        Regex(">\\s*")
     )
 
     /** 最近执行记录，供界面回查 */
