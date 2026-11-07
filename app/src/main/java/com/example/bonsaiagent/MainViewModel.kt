@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.bonsaiagent.agent.Actions
 import com.example.bonsaiagent.agent.CloudClient
 import com.example.bonsaiagent.agent.Executor
+import com.example.bonsaiagent.agent.FastRoute
 import com.example.bonsaiagent.agent.Router
 import com.example.bonsaiagent.agent.RouteResult
 import com.example.bonsaiagent.api.LocalApiServer
@@ -392,6 +393,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             "yyyy年M月d日 EEEE HH:mm", java.util.Locale.CHINA
         ).format(java.util.Date())
         val sysAgent = s.systemPrompt + "\n当前时间：" + nowStr
+
+        // v7.5 快路径：高频短指令直接命中，不经过模型。
+        // 实测这类指令占 prefill 33 秒的绝大部分，而意图是确定的，查表就够。
+        FastRoute.match(msg)?.let { hit ->
+            when (hit) {
+                is FastRoute.Hit.Answer -> ai.content.value = hit.text
+                is FastRoute.Hit.Act -> {
+                    ai.content.value = "[→ 动作] ${hit.action}（快路径）\n"
+                    ai.content.value += Actions.run(getApplication(), hit.action, null)
+                }
+            }
+            genStatus.value = GenStatus(phase = "就绪")
+            return
+        }
 
         val prompt = buildString {
             append("<|im_start|>system\n").append(sysAgent).append("<|im_end|>\n")
