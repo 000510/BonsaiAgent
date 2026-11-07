@@ -540,6 +540,18 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     // 连续生成 22 个 token 都正常。先排除这个变量，提速交给指令集优化。
     cparams.n_batch         = 128;
     cparams.n_ubatch        = 64;
+
+    // v6.5 关键修复：KV cache 改用 FP32。
+    // 崩溃现场：
+    //   vec.cpp:369 ggml_vec_dot_f16: assertion "!isnan(sumf) && !isinf(sumf)" failed
+    //   Fatal signal 6 (SIGABRT) in tid (llama-gen)
+    // llama.cpp 默认把 K/V cache 存成 FP16，而 FP16 上限只有 65504。
+    // 序列一长，注意力分数累积就溢出成 Inf，再算下去变 NaN，断言直接把进程杀掉。
+    // 这正是为什么总在生成到 40~50 个 token 时崩：短问答碰不到，长回答必中。
+    // 改成 FP32 后精度足够，代价是 KV cache 内存翻倍（2048 上下文约多 35MB），
+    // 相比 5GB 可用内存完全无感。
+    cparams.type_k          = GGML_TYPE_F32;
+    cparams.type_v          = GGML_TYPE_F32;
     cparams.n_threads       = (uint32_t) (n_threads > 0 ? n_threads : 4);
     cparams.n_threads_batch = cparams.n_threads;
     // 主线版本该字段名/枚举可能不同，用默认值（AUTO）即可

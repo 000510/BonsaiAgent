@@ -28,8 +28,13 @@ add_compile_options(-O3 -fno-math-errno)
 # ---------------------------------------------------------------------------
 set(CMAKE_C_FLAGS_RELEASE   "-O3 -g" CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g" CACHE STRING "" FORCE)
-set(CMAKE_C_FLAGS_DEBUG     "-O3 -g" CACHE STRING "" FORCE)
-set(CMAKE_CXX_FLAGS_DEBUG   "-O3 -g" CACHE STRING "" FORCE)
+# -DNDEBUG：调试断言全部失效。
+# 我们跑的是 Debug 构建，ggml 内部大量 assert 会直接 abort 进程 ——
+# 像 vec.cpp 那条 "!isnan(sumf) && !isinf(sumf)" 就是把一次数值溢出变成整进程猝死。
+# 关掉后即使偶发数值异常，也只是输出失真，不会让 App 退出。
+# （前面几版被各种 assert 打断，根子都在这儿。）
+set(CMAKE_C_FLAGS_DEBUG     "-O3 -g -DNDEBUG" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG   "-O3 -g -DNDEBUG" CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_RELWITHDEBINFO   "-O3 -g" CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g" CACHE STRING "" FORCE)
 
