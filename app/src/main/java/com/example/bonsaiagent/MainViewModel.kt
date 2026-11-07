@@ -368,10 +368,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         agentMessages.add(user); agentMessages.add(ai)
         val s = settings.value
         // ChatML 格式（Qwen 系用）
+        // v7.0：跟对话页对齐——带上最近几轮历史，并跳过 <think> 思考。
+        // 路由判断是"看一眼决定走哪条路"，让它思考 200 个 token 纯属浪费
+        //（实测要等 30 秒，还进过崩溃路径）。
+        val aHistory = mutableListOf<String>()
+        var aChars = 0
+        for (m in agentMessages.dropLast(1).asReversed()) {
+            val body = m.content.value
+            if (body.isBlank()) continue
+            val role = if (m.role == "user") "user" else "assistant"
+            val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
+            if (aChars + piece.length > 400) break
+            aHistory.add(0, piece)
+            aChars += piece.length
+        }
         val prompt = buildString {
             append("<|im_start|>system\n").append(s.systemPrompt).append("<|im_end|>\n")
-            append("<|im_start|>user\n").append(msg).append("<|im_end|>\n")
+            for (h in aHistory) append(h)
             append("<|im_start|>assistant\n")
+            append("<think>\n\n</think>\n")
         }
         genStatus.value = GenStatus(phase = "处理输入")
         viewModelScope.launch(Dispatchers.IO) {
@@ -406,7 +421,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 is RouteResult.Exec -> {
                     mainHandler.post { ai.content.value += "\n\n[→ 执行命令] ${route.command}\n" }
-                    val out = Executor.run(route.command)
+                    val out = Executor.run(route.command, s.allowDangerous)
                     mainHandler.post { ai.content.value += out }
                 }
                 else -> { /* 直接回答，无需路由 */ }

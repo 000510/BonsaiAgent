@@ -108,6 +108,29 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         )
 
         Divider(Modifier.padding(vertical = 8.dp))
+        Text("Agent 安全", style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "允许执行危险命令",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+            )
+            Switch(
+                checked = s.allowDangerous,
+                onCheckedChange = { vm.updateSettings(s.copy(allowDangerous = it)) }
+            )
+        }
+        Text(
+            "默认关闭。本地模型可能被「帮我清理一下存储」这类话诱导出 " +
+                    "rm -rf、pm uninstall、su、curl|sh 等命令。" +
+                    "关闭时这些操作会被安全墙拦下并告知你；只有你明确打开后才放行。" +
+                    "建议保持关闭。",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (s.allowDangerous) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.outline
+        )
+
+        Divider(Modifier.padding(vertical = 8.dp))
         Text("云端 API（DeepSeek）", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(
             value = s.deepseekKey,

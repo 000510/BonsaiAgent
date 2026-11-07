@@ -20,7 +20,10 @@ data class AgentSettings(
     val downloadSource: String = "HF镜像",
     val apiEnabled: Boolean = false,
     val deepseekKey: String = "",
-    val apiBase: String = "https://api.deepseek.com"
+    val apiBase: String = "https://api.deepseek.com",
+    // v7.0：危险命令开关。默认关闭 —— 本地模型可能被诱导出破坏性命令，
+    // 必须由用户明确打开才允许执行 rm -rf / pm uninstall / su 这类操作。
+    val allowDangerous: Boolean = false
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是一个运行在手机上的本地混合智能体。请严格遵守以下路由规则：
@@ -57,7 +60,8 @@ class SettingsStore(context: Context) {
         downloadSource = sp.getString("downloadSource", "HF镜像") ?: "HF镜像",
         apiEnabled = sp.getBoolean("apiEnabled", false),
         deepseekKey = sp.getString("deepseekKey", "") ?: "",
-        apiBase = sp.getString("apiBase", "https://api.deepseek.com") ?: "https://api.deepseek.com"
+        apiBase = sp.getString("apiBase", "https://api.deepseek.com") ?: "https://api.deepseek.com",
+        allowDangerous = sp.getBoolean("allowDangerous", false)
     )
 
     fun save(s: AgentSettings) {
@@ -74,6 +78,7 @@ class SettingsStore(context: Context) {
             putBoolean("apiEnabled", s.apiEnabled)
             putString("deepseekKey", s.deepseekKey)
             putString("apiBase", s.apiBase)
+            putBoolean("allowDangerous", s.allowDangerous)
         }.apply()
     }
 }
