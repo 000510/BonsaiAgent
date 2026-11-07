@@ -56,22 +56,40 @@ jobs:
 
       - name: 下载匹配版本的 Vulkan-Headers + SPIRV-Headers
         run: |
-          VK="${{ inputs.vk_version }}"
-          curl -fsSL --retry 3 "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/${VK}.tar.gz" -o vk.tar.gz
-          tar xzf vk.tar.gz
-          VKDIR="$PWD/Vulkan-Headers-${VK#v}"
-          echo "VULKAN_INCLUDE=$VKDIR/include" >> $GITHUB_ENV
-          echo "VULKAN_ROOT=$PWD/Vulkan-Headers-${VK#v}" >> $GITHUB_ENV
-          ls "$VKDIR/include/vulkan" | head
-          echo "--- Vulkan 头版本（要 ≥258）---"
-          grep -m2 "VK_HEADER_VERSION" "$VKDIR/include/vulkan/vulkan_core.h"
+          # 关键：vulkan.hpp 必须和 NDK 的 vulkan_core.h 版本号完全一致，
+          # 否则 ggml-vulkan.cpp 的 static_assert 会直接报 "Wrong VK_HEADER_VERSION"。
+          # 所以不写死版本，从 NDK 头里读出来再下载对应的。
+          NDK_HDR="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan/vulkan_core.h"
+          VER=$(grep -oP '#define VK_HEADER_VERSION\s+\K[0-9]+' "$NDK_HDR" | head -1)
+          echo "NDK VK_HEADER_VERSION = $VER"
+          if [ -z "$VER" ]; then echo "::error::读不到 NDK 的 Vulkan 版本"; exit 1; fi
 
-          # SPIR-V 头（glslc 产物、llama.cpp 的 CMake 都要）
+          OK=0
+          for TAG in "v1.3.$VER" "sdk-1.3.$VER.0" "vulkan-sdk-1.3.$VER.0" "v1.3.$VER.0"; do
+            echo "尝试 $TAG ..."
+            if curl -fsSL --retry 2 "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/${TAG}.tar.gz" -o vk.tar.gz; then
+              tar xzf vk.tar.gz
+              VKDIR=$(ls -d Vulkan-Headers-* 2>/dev/null | head -1)
+              if [ -n "$VKDIR" ] && [ -f "$VKDIR/include/vulkan/vulkan.hpp" ]; then
+                HDRVER=$(grep -oP '#define VK_HEADER_VERSION\s+\K[0-9]+' "$VKDIR/include/vulkan/vulkan_core.h" | head -1)
+                echo "下载到 $TAG，其 VK_HEADER_VERSION = $HDRVER"
+                if [ "$HDRVER" = "$VER" ]; then OK=1; break; fi
+              fi
+            fi
+          done
+          if [ "$OK" != "1" ]; then echo "::error::没找到匹配 $VER 的 Vulkan-Headers"; exit 1; fi
+
+          echo "VULKAN_INCLUDE=$PWD/$VKDIR/include" >> $GITHUB_ENV
+          echo "VULKAN_ROOT=$PWD/$VKDIR" >> $GITHUB_ENV
+          ls "$VKDIR/include/vulkan" | head
+
+          # SPIR-V 头（glslc 产物 + llama.cpp CMake 需要）
           SV="v2024.4"
-          curl -fsSL --retry 3 "https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/${SV}.tar.gz" -o spirv.tar.gz
+          curl -fsSL --retry 3 "https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/${SV}.tar.gz" -o spirv.tar.gz || \
+          curl -fsSL --retry 3 "https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/heads/main.tar.gz" -o spirv.tar.gz
           tar xzf spirv.tar.gz
-          SV_DIR="$PWD/SPIRV-Headers-${SV#v}"
-          echo "SPIRV_DIR=$SV_DIR" >> $GITHUB_ENV
+          SV_DIR=$(ls -d SPIRV-Headers-* 2>/dev/null | head -1)
+          echo "SPIRV_DIR=$PWD/$SV_DIR" >> $GITHUB_ENV
           ls "$SV_DIR/include/spirv" | head -3
 
       - name: 克隆 llama.cpp（prism 分支，和 App 用的一致）
