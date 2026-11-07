@@ -93,7 +93,9 @@ class LocalApiServer(
         val (temp, topK, topP) = getSettings()
 
         val full = StringBuilder()
+        // v8.0：generate 增加 sysPrefix 参数（KV 前缀缓存用），这里走不缓存的旧路径
         val out = Llama.generate(
+            sysPrefix = "",
             prompt = if (system.isBlank()) prompt else "$system\n\n用户: $prompt\n助手:",
             temp = temp, topK = topK, topP = topP, repPen = 1.0f, maxTokens = maxTokens
         ) { full.append(it) }
