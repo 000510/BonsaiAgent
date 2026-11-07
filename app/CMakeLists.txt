@@ -80,7 +80,7 @@ set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+i8mm" CACHE STRING "" FORCE)
 #
 # 保留 CPU 后端（不开 VULKAN_ONLY），GPU 跑不动时还能退回。
 # ---------------------------------------------------------------------------
-set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+set(GGML_VULKAN OFF CACHE BOOL "" FORCE)   # v9.1 回滚：NDK r26 的 Vulkan 头(1.3.237)太老，llama.cpp 要 1.3.258+
 
 # NDK 交叉编译时 CMake 只在 sysroot 里找包，不会看主机的 /usr/share/cmake，
 # 而 SPIRV-Headers / SPIRV-Tools 是系统 apt 包装的，必须显式指路。
