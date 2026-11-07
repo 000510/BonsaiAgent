@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.bonsaiagent.agent.Actions
 import com.example.bonsaiagent.agent.CloudClient
 import com.example.bonsaiagent.agent.Executor
 import com.example.bonsaiagent.agent.Router
@@ -307,6 +308,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 这里把要求提到 system 里，并给出"分段"这种可执行的结构，
         // 比单纯重复"1000字"有效得多。只对本次请求生效，不影响普通聊天。
         val wantLen = Regex("""(\d{2,5})\s*字""").find(msg)?.groupValues?.get(1)?.toIntOrNull()
+        val nowForChat = java.text.SimpleDateFormat(
+            "yyyy年M月d日 EEEE HH:mm", java.util.Locale.CHINA
+        ).format(java.util.Date())
         val sysText = if (wantLen != null && wantLen >= 100) {
             val paras = (wantLen / 150).coerceIn(3, 12)
             "你是中文写作助手。用户要求约${wantLen}字，请分${paras}个自然段写完，" +
@@ -314,9 +318,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             "你是手机本地助手，回答简洁准确。"
         }
+        val sysTextWithTime = sysText + "\n当前时间：" + nowForChat
         val prompt = buildString {
             append("<|im_start|>system\n")
-            append(sysText).append("<|im_end|>\n")
+            append(sysTextWithTime).append("<|im_end|>\n")
             for (h in history) append(h)
             append("<|im_start|>assistant\n")
             // v6.6：跳过思考阶段。
@@ -382,8 +387,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             aHistory.add(0, piece)
             aChars += piece.length
         }
+        // v7.2：把真实时间写进 system，模型自己不知道现在几点（实测会编出 2023 年的日期）
+        val nowStr = java.text.SimpleDateFormat(
+            "yyyy年M月d日 EEEE HH:mm", java.util.Locale.CHINA
+        ).format(java.util.Date())
+        val sysAgent = s.systemPrompt + "\n当前时间：" + nowStr
+
         val prompt = buildString {
-            append("<|im_start|>system\n").append(s.systemPrompt).append("<|im_end|>\n")
+            append("<|im_start|>system\n").append(sysAgent).append("<|im_end|>\n")
             for (h in aHistory) append(h)
             append("<|im_start|>assistant\n")
             append("<think>\n\n</think>\n")
@@ -418,6 +429,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     mainHandler.post { ai.content.value += "\n\n[→ 已路由云端] ${route.description}\n" }
                     val cloud = CloudClient.chat(s.apiBase, s.deepseekKey, route.description)
                     mainHandler.post { ai.content.value += cloud }
+                }
+                is RouteResult.Action -> {
+                    mainHandler.post { ai.content.value += "\n\n[→ 动作] ${route.name}${route.arg?.let { " ($it)" } ?: ""}\n" }
+                    val app = getApplication<android.app.Application>()
+                    val out = Actions.run(app, route.name, route.arg)
+                    mainHandler.post { ai.content.value += out }
                 }
                 is RouteResult.Exec -> {
                     mainHandler.post { ai.content.value += "\n\n[→ 执行命令] ${route.command}\n" }

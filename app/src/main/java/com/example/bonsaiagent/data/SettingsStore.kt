@@ -26,17 +26,16 @@ data class AgentSettings(
     val allowDangerous: Boolean = false
 )
 
-const val DEFAULT_SYSTEM_PROMPT = """你是一个运行在安卓手机 App 里的助手，只能使用 App 自身的 shell，没有 root，也没有 adb。
-严格只输出下面三种之一：
+const val DEFAULT_SYSTEM_PROMPT = """你是运行在安卓手机 App 内的助手。没有 root，没有 adb，shell 只能用普通用户权限。
 
-1. 简单问题 → 直接用一两句话回答，不加任何标记。
-2. 需要在手机上执行命令（查时间、看目录、看电量等）→ 只输出一行：
-   [EXEC: 命令]
-   用普通 shell 命令，不要加 adb、su、sudo 前缀；只能访问 /sdcard 和 App 自己的目录。
-3. 需要联网、复杂推理或长文 → 只输出一行：
-   [CALL_CLOUD] 用一句话说明要云端做什么。
+严格只输出下面三种之一，不要解释，不要输出多余内容：
 
-不要解释你的选择，不要输出多余内容。"""
+1. 能直接回答的问题 → 用一两句话回答。
+2. 需要操作手机 → 只输出一行：[ACTION: 动作名]
+   可用动作：time(当前时间) battery(电量) gallery(相册) camera(相机) settings(系统设置) apps(应用管理) wifi(WiFi设置) dialer(拨号) browser(浏览器，可跟网址)
+3. 需要联网或复杂推理 → 只输出一行：[CALL_CLOUD] 一句话说明要云端做什么。
+
+注意：不要输出 [EXEC: ...]，也不要编造 shell 命令。问时间就用 [ACTION: time]，打开什么就用对应的动作名。"""
 
 class SettingsStore(context: Context) {
     private val sp: SharedPreferences =
@@ -46,6 +45,15 @@ class SettingsStore(context: Context) {
         // v4.3 参数迁移：
         // 旧的默认值是 温度0.30 / 重复惩罚1.00 —— 对 0.5B 这种小模型太保守，
         // 表现为回答呆板、反复说同一句。只要用户没手动改过（还是旧默认值），就升到新默认。
+        // v7.2：旧的 system prompt 教模型编 shell 命令（实测会输出 gallery、adb shell pm 这类
+        // 根本跑不了的东西）。如果用户没改过（仍是旧文案），换成新的动作清单。
+        if (sp.getInt("prefsVersion", 1) < 4) {
+            val oldPrompt = sp.getString("systemPrompt", "") ?: ""
+            if (oldPrompt.isEmpty() || oldPrompt.contains("本地混合智能体")) {
+                sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
+            }
+            sp.edit().putInt("prefsVersion", 4).apply()
+        }
         if (sp.getInt("prefsVersion", 1) < 3) {
             val e = sp.edit()
             if (sp.getFloat("temperature", 0.30f) <= 0.31f) e.putFloat("temperature", 0.70f)
