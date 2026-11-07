@@ -48,9 +48,12 @@ object FastRoute {
         val t = clean(raw)
         if (t.isEmpty() || t.length > 12) return null   // 太长的句子很可能带附加意图，交给模型
 
-        // 1) 打开某物
+        // 1) 打开某物：正装「打开相册」和倒装「相册开一下」都要认
         Regex("^(打开|启动|进入|开|调出|唤出)(.{1,6})$").find(t)?.let { m ->
             OPEN_MAP[m.groupValues[2].trim()]?.let { return Hit.Act(it) }
+        }
+        Regex("^(.{1,6}?)(开一下|打开一下|开开|打开|启动|进入|开)$").find(t)?.let { m ->
+            OPEN_MAP[m.groupValues[1].trim()]?.let { return Hit.Act(it) }
         }
 
         // 2) 纯问时间

@@ -40,9 +40,31 @@ object Actions {
     /**
      * @return 给用户看的执行结果
      */
+    /**
+     * v7.6：动作名归一化。
+     * 实测模型会输出 [ACTION:相册] 这种中文名字（提示词里写的是英文 gallery，
+     * 但它按语义翻译了）。所以这里中英都认，避免掉进"未知动作"。
+     */
+    private fun normalize(name: String): String {
+        val n = name.trim().lowercase()
+        return when {
+            n in listOf("相册", "图库", "照片", "相片", "相簿", "album", "photos", "picture") -> "gallery"
+            n in listOf("相机", "照相机", "拍照", "摄像") -> "camera"
+            n in listOf("设置", "系统设置", "设定") -> "settings"
+            n in listOf("应用", "应用列表", "应用管理", "程序") -> "apps"
+            n in listOf("无线网", "无线局域网", "无线") -> "wifi"
+            n in listOf("拨号", "拨号盘", "电话", "打电话") -> "dialer"
+            n in listOf("浏览器", "网页", "上网") -> "browser"
+            n in listOf("时间", "日期", "现在几点") -> "time"
+            n in listOf("电量", "电池", "剩余电量") -> "battery"
+            else -> n
+        }
+    }
+
     fun run(ctx: Context, name: String, arg: String?): String {
+        val action = normalize(name)
         return try {
-            when (name) {
+            when (action) {
                 "time", "date", "time_now" -> {
                     SimpleDateFormat("yyyy年M月d日 EEEE HH:mm:ss", Locale.CHINA).format(Date())
                 }

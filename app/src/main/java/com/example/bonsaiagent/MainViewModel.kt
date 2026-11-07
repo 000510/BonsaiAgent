@@ -400,7 +400,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             when (hit) {
                 is FastRoute.Hit.Answer -> ai.content.value = hit.text
                 is FastRoute.Hit.Act -> {
-                    ai.content.value = "[→ 动作] ${hit.action}（快路径）\n"
+                    ai.content.value = "[→ 动作] ${hit.action}（快路径，0秒）\n"
                     ai.content.value += Actions.run(getApplication(), hit.action, null)
                 }
             }
