@@ -132,13 +132,28 @@ jobs:
 
       - name: 检查产物
         run: |
-          find llama.cpp/build-android -name "*.so" -o -name "*vulkan*" | head -20
+          echo "=== 所有 .so ==="
+          find llama.cpp/build-android -name "*.so" -exec ls -lh {} \; 2>/dev/null
+          echo "=== 所有含 vulkan 的文件 ==="
+          find llama.cpp/build-android -iname "*vulkan*" -maxdepth 4 2>/dev/null | head -30
+          echo "=== build 目录 ==="
+          ls llama.cpp/build-android/ 2>/dev/null
           SO=$(find llama.cpp/build-android -name "libggml-vulkan.so" | head -1)
           if [ -n "$SO" ]; then
-            echo "SUCCESS: $SO"
+            echo "::notice::编出 libggml-vulkan.so：$SO"
             file "$SO"
-            ls -lh "$SO"
+            nm -D "$SO" 2>/dev/null | grep -c " ggml_backend_vk_" && echo "导出了 ggml_backend_vk_* 符号"
           else
-            echo "::error::没编出 libggml-vulkan.so"
+            echo "::error::没找到 libggml-vulkan.so，但编译步骤是成功的 —— 看上面的清单判断产物叫什么"
             exit 1
           fi
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulkan-libs
+          path: |
+            llama.cpp/build-android/**/*vulkan*
+            llama.cpp/build-android/**/*.so
+          if-no-files-found: warn
