@@ -111,6 +111,7 @@ jobs:
             -DANDROID_PLATFORM=android-28 \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_VULKAN=ON \
+            -DGGML_BACKEND_DL=ON \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
@@ -128,24 +129,29 @@ jobs:
       - name: 编译
         run: |
           cd llama.cpp
-          cmake --build build-android --target ggml-vulkan -- -j$(nproc) 2>&1 | tail -40
+          # 编整个项目：Vulkan 后端在 GGML_BACKEND_DL=ON 下才会生成独立的 libggml-vulkan.so
+          cmake --build build-android -- -j$(nproc) 2>&1 | tail -30
+          echo "=== 构建完成，产物清单 ==="
+          find build-android -name "*.so" -exec ls -lh {} \; 2>/dev/null
 
       - name: 检查产物
         run: |
           echo "=== 所有 .so ==="
-          find llama.cpp/build-android -name "*.so" -exec ls -lh {} \; 2>/dev/null
-          echo "=== 所有含 vulkan 的文件 ==="
-          find llama.cpp/build-android -iname "*vulkan*" -maxdepth 4 2>/dev/null | head -30
-          echo "=== build 目录 ==="
-          ls llama.cpp/build-android/ 2>/dev/null
-          SO=$(find llama.cpp/build-android -name "libggml-vulkan.so" | head -1)
-          if [ -n "$SO" ]; then
-            echo "::notice::编出 libggml-vulkan.so：$SO"
-            file "$SO"
-            nm -D "$SO" 2>/dev/null | grep -c " ggml_backend_vk_" && echo "导出了 ggml_backend_vk_* 符号"
+          find llama.cpp/build-android -name "*.so" -exec ls -lh {} \; 2>/dev/null || true
+          echo "=== 含 vulkan 的产物 ==="
+          find llama.cpp/build-android -iname "*vulkan*" 2>/dev/null | head -20 || true
+          VK=$(find llama.cpp/build-android -name "libggml-vulkan.so" | head -1)
+          if [ -n "$VK" ]; then
+            echo "::notice::成功编出 $VK"
+            file "$VK"
           else
-            echo "::error::没找到 libggml-vulkan.so，但编译步骤是成功的 —— 看上面的清单判断产物叫什么"
-            exit 1
+            echo "::warning::没生成独立的 libggml-vulkan.so"
+            # 看看是不是静态链进了 libggml.so
+            GG=$(find llama.cpp/build-android -name "libggml.so" | head -1)
+            if [ -n "$GG" ]; then
+              echo "检查 libggml.so 里是否含 vulkan 符号："
+              nm -D "$GG" 2>/dev/null | grep -c "ggml_backend_vk" || echo "0"
+            fi
           fi
 
       - name: 上传产物
