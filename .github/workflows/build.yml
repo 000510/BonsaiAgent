@@ -28,8 +28,12 @@ jobs:
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" "ndk;26.3.11579264" "cmake;3.22.1"
           # v9.0：Vulkan 后端需要 glslc 把 compute shader 编成 SPIR-V
           sudo apt-get update -qq
+          # glslc 把 compute shader 编成 SPIR-V；SPIRV-Headers/Tools 是 llama.cpp
+          # Vulkan 后端的 find_package 硬依赖，缺了会在 CMake 配置阶段直接失败
           sudo apt-get install -y -qq glslc || sudo apt-get install -y -qq shaderc
+          sudo apt-get install -y -qq spirv-headers spirv-tools libvulkan-dev || true
           glslc --version
+          dpkg -L spirv-headers 2>/dev/null | grep -i config | head -3 || true
 
       - name: 克隆 PrismML llama.cpp（prism 分支）
         run: |
