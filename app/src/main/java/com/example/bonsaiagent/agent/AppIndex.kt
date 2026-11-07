@@ -48,6 +48,7 @@ object AppIndex {
         "b站" to "哔哩哔哩", "bilibili" to "哔哩哔哩", "哔哩" to "哔哩哔哩",
         "bili" to "哔哩哔哩", "小破站" to "哔哩哔哩", "哔站" to "哔哩哔哩",
         "哔哩哔哩" to "哔哩哔哩", "bilibili动画" to "哔哩哔哩",
+        "bil" to "哔哩哔哩", "blbl" to "哔哩哔哩",
         "网易云" to "网易云音乐", "云音乐" to "网易云音乐",
         "qq音乐" to "QQ音乐",
         "酷狗" to "酷狗音乐",
@@ -205,11 +206,26 @@ object AppIndex {
         entries.filter { core(norm(it.label)).length >= 2 && qc.contains(core(norm(it.label))) }
             .minByOrNull { it.label.length }?.let { return it }
 
+        // 7) 整句里含有某个口语别名（「不对，是bilibili」）
+        if (qc.length in 3..20) {
+            ALIAS.entries
+                .filter { core(it.key).length >= 2 && qc.contains(core(it.key)) }
+                .maxByOrNull { it.key.length }
+                ?.let { (_, target) ->
+                    val tn = norm(target)
+                    entries.firstOrNull { norm(it.label) == tn }?.let { return it }
+                }
+        }
+
         // 6) 模糊：字符重合度。
         //    「哔站」和「哔哩哔哩」硬匹配对不上，但"哔"是重合的。
         //    只在 fuzzy=true（明确的"打开某应用"句式）时启用 ——
         //    用户随口说「南京」时手机里装着「南京银行」，绝不能靠模糊去猜。
-        if (fuzzy && qc.length <= 4) {
+        //
+        //    而且只对中文生效：英文按字符重合算毫无意义 ——
+        //    实测「Bil」的 b/i/l 在 accessibility 里全都有，算出来 100%，
+        //    结果把无障碍工具给打开了。
+        if (fuzzy && qc.length <= 4 && qc.any { it.code > 127 }) {
             entries.map { it to overlap(qc, it.label) }
                 .filter { it.second >= 0.5 }
                 .sortedWith(compareByDescending<Pair<Entry, Double>> { it.second }

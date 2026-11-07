@@ -45,9 +45,19 @@ object FastRoute {
         "浏览器" to "browser", "百度" to "browser"
     )
 
+    /** "一个""那个"这类纯填充词，出现在句中任何位置都要删掉，否则拆不出目标词 */
+    private val FILLERS = listOf(
+        "一个", "那个", "这个", "一下", "顺便", "麻烦你", "麻烦", "帮我", "给我",
+        "你能不能", "能不能", "可不可以", "请你", "请", "替我", "我想要", "我要", "我想"
+    )
+
+    /** 目标词末尾的泛化后缀：「Bil站」→「Bil」，「抖音app」→「抖音」 */
+    private val SUFFIX_WORDS = listOf("站", "app", "App", "APP", "软件", "应用", "客户端")
+
     /** 去掉客套前缀，便于后面的模式匹配 */
     private fun clean(s: String): String {
         var t = s.trim().replace(" ", "").replace("　", "")
+        for (f in FILLERS) t = t.replace(f, "")
         // 反复剥离，因为「麻烦你帮我把微信打开」是多层前缀
         val prefixes = listOf(
             "麻烦你", "麻烦", "能不能", "可不可以", "可以", "能不能帮我", "帮我", "帮忙",
@@ -73,8 +83,21 @@ object FastRoute {
         val t = target.trim()
         if (t.isEmpty()) return null
         OPEN_MAP[t]?.let { return Hit.Act(it) }
-        // fuzzy=true：这是"打开 X"句式，用户意图明确，可以容忍字形相近
-        AppIndex.find(ctx, t, fuzzy = true)?.let { return Hit.Act("openapp", it.label) }
+
+        // 剥掉尾巴上的泛化词再试一遍：「Bil站」→「Bil」
+        val variants = buildList {
+            add(t)
+            for (w in SUFFIX_WORDS) {
+                if (t.endsWith(w) && t.length > w.length) add(t.dropLast(w.length).trim())
+            }
+        }.distinct()
+
+        for (v in variants) {
+            if (v.isEmpty()) continue
+            OPEN_MAP[v]?.let { return Hit.Act(it) }
+            // fuzzy=true：这是"打开 X"句式，用户意图明确，可以容忍字形相近
+            AppIndex.find(ctx, v, fuzzy = true)?.let { return Hit.Act("openapp", it.label) }
+        }
         return null
     }
 
@@ -107,7 +130,8 @@ object FastRoute {
 
         // 4) 光说一个应用名：「微信」「B站」
         // 裸说一个应用名才算（不做模糊，避免「南京」误开「南京银行」）
-        if (t.length <= 8) {
+        // v10.2：上限放宽到 16，覆盖「不对，是bilibili」这类带前后缀的口语
+        if (t.length <= 16) {
             AppIndex.find(ctx, t, fuzzy = false)?.let { return Hit.Act("openapp", it.label) }
         }
 
