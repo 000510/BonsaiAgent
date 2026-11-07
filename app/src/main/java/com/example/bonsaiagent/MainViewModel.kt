@@ -121,9 +121,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun extractAnswer(raw: String): Pair<String, Boolean> {
         val close = raw.indexOf("</think>")
         if (close >= 0) {
-            return raw.substring(close + 8).trimStart() to false
+            val ans = raw.substring(close + 8).trimStart()
+            if (ans.isNotEmpty()) return ans to false
+            // v9.2：</think> 之后是空的 —— 小模型（1.5B）不理解这个约定，
+            // 会把正文全写进思考区。这时退回去用思考区的内容，总比什么都不显示好。
+            val open = raw.indexOf("<think>")
+            if (open >= 0 && close > open) {
+                val inner = raw.substring(open + 7, close).trim()
+                if (inner.isNotEmpty()) return inner to false
+            }
+            return "（模型没有输出内容，可以换个说法再问一次）" to false
         }
-        if (raw.contains("<think>")) return "" to true
+        if (raw.contains("<think>")) {
+            // 思考区没闭合：把已有的内容先显示出来，别让用户干等一个省略号
+            val open = raw.indexOf("<think>")
+            val inner = raw.substring(open + 7).trimStart()
+            if (inner.isNotEmpty()) return inner to true
+            return "" to true
+        }
+        if (raw.isBlank()) return "（模型没有输出内容，可以换个说法再问一次）" to false
         return raw to false
     }
 
