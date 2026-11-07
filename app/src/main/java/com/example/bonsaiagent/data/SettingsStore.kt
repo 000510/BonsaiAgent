@@ -26,20 +26,8 @@ data class AgentSettings(
     val allowDangerous: Boolean = false
 )
 
-const val DEFAULT_SYSTEM_PROMPT = """你是手机助手。只回一行，用中文。
-不要复述用户说的话。不要重复下面的规则。
-要打开某个App：写 [ACTION:openapp] 空格 然后写App名字
-要查时间：写 [ACTION:time]
-要查电量：写 [ACTION:battery]
-要开相册：写 [ACTION:gallery]
-要开相机：写 [ACTION:camera]
-要开设置：写 [ACTION:settings]
-要开WiFi：写 [ACTION:wifi]
-要开拨号盘：写 [ACTION:dialer]
-要开浏览器：写 [ACTION:browser]
-要联网或问题太复杂：写 [CALL_CLOUD] 空格 然后写需求
-能直接回答就直接回答，不加任何前缀。
-不要用 [EXEC:] 和 shell 命令。无 root、无 adb。"""
+const val DEFAULT_SYSTEM_PROMPT = """只回一行中文，不要复述。
+开App写[ACTION:openapp]名字。时间写[ACTION:time]。电量写[ACTION:battery]。联网或复杂写[CALL_CLOUD]需求。其他直接回答。"""
 
 class SettingsStore(context: Context) {
     private val sp: SharedPreferences =
@@ -70,15 +58,18 @@ class SettingsStore(context: Context) {
         // v10.0：动作协议从「协议名清单」改成「开应用 + 参数」。
         // 1.5B 会照着「操作手机→[ACTION:名]」这个范例原样复读，
         // 所以新文案里一个具体例子都不给，只留占位符。
-        if (sp.getInt("prefsVersion", 1) < 11) {
+        if (sp.getInt("prefsVersion", 1) < 12) {
             val oldPrompt = sp.getString("systemPrompt", "") ?: ""
             val isOld = oldPrompt.isEmpty() ||
                     oldPrompt.contains("操作手机→[ACTION:名]") ||
                     oldPrompt.contains("联网或复杂→[CALL_CLOUD] 需求") ||
                     oldPrompt.contains("开应用→[ACTION:openapp]") ||
-                    oldPrompt.contains("查状态→[ACTION:time]")
+                    oldPrompt.contains("查状态→[ACTION:time]") ||
+                    oldPrompt.contains("你是手机助手") ||
+                    oldPrompt.contains("要打开某个App") ||
+                    oldPrompt.contains("开App：[ACTION:openapp]")
             if (isOld) sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
-            sp.edit().putInt("prefsVersion", 11).apply()
+            sp.edit().putInt("prefsVersion", 12).apply()
         }
         return loadInner()
     }

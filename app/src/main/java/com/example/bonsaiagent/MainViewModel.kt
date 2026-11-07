@@ -395,7 +395,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
                     val snap = GenStatus(if (thinking) "思考中" else "生成中", speed, tokCount, show.length)
                     mainHandler.post {
-                        ai.content.value = show
+                        // v10.4：路由页不实时显示模型原文。
+                        // 模型（尤其 1.5B）会把提示词、用户的话复读一遍，
+                        // 那堆东西对用户毫无意义 —— 这里只更新状态条，
+                        // 真正的结果等解析完（动作/云端/回答）再一次性给出。
                         genStatus.value = snap
                     }
                 }
@@ -480,7 +483,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
                     val snap = GenStatus(if (thinking) "思考中" else "生成中", speed, tokCount, show.length)
                     mainHandler.post {
-                        ai.content.value = show
+                        // v10.4：路由页不实时显示模型原文。
+                        // 模型（尤其 1.5B）会把提示词、用户的话复读一遍，
+                        // 那堆东西对用户毫无意义 —— 这里只更新状态条，
+                        // 真正的结果等解析完（动作/云端/回答）再一次性给出。
                         genStatus.value = snap
                     }
                 }
@@ -522,7 +528,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val out = Executor.run(route.command, s.allowDangerous)
                     mainHandler.post { ai.content.value += out }
                 }
-                else -> { /* 直接回答，无需路由 */ }
+                else -> {
+                    // 直接回答：这时候才把模型写的东西一次显示出来
+                    val ans = extractAnswer(raw.toString()).first
+                    mainHandler.post { ai.content.value = ans }
+                }
             }
         }
     }
