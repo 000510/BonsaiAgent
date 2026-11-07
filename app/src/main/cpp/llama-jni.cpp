@@ -535,9 +535,10 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     if (want_ctx > 2048u) want_ctx = 2048u;   // 4096 时 KV cache 约 600MB，手机扛不住
     if (want_ctx < 512u)  want_ctx = 512u;
     cparams.n_ctx           = want_ctx;
-    // v6.2：加大微批。prefill 是批量矩阵乘，ubatch 越大，矩阵乘的 n 维越大、
-    // 硬件利用率越高。8B 模型下 compute buffer 从 42MB 涨到约 84MB，内存扛得住。
-    cparams.n_batch         = 256;
+    // v6.3：n_batch 退回 128。v6.2 曾提到 256，但 8B 模型下 compute buffer 会跟着
+    // 翻倍，加上 2.18GB 权重和 KV cache，容易触发系统回收 —— 这可能是那一版挂掉的原因。
+    // n_ubatch 保持 128（不超过 n_batch），微批效率的收益仍然保留。
+    cparams.n_batch         = 128;
     cparams.n_ubatch        = 128;
     cparams.n_threads       = (uint32_t) (n_threads > 0 ? n_threads : 4);
     cparams.n_threads_batch = cparams.n_threads;

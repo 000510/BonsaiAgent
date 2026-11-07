@@ -59,6 +59,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val status = mutableStateOf("欢迎使用 BonsaiAgent")
     // v6.0：界面状态条用的实时状态（替代原来刷屏的实时日志）
     val genStatus = mutableStateOf(GenStatus())
+    /** 上次崩溃现场（保留不删，供诊断分享） */
+    val lastCrash = mutableStateOf("")
     val chatMessages = mutableStateListOf<ChatMessage>()
     val agentMessages = mutableStateListOf<ChatMessage>()
 
@@ -67,24 +69,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val crashFile = java.io.File(app.filesDir, "last_crash.txt")
         val logFile = java.io.File(app.filesDir, "run_log.txt")
         val errFile = java.io.File(app.filesDir, "native_stderr.txt")
+        // v6.3：崩溃记录读完不再删除，留一份给"分享诊断"，否则点按钮时已经没了
         val crash = if (crashFile.exists()) {
-            val t = try { crashFile.readText().trim() } catch (e: Throwable) { "" }
-            crashFile.delete()
-            t
+            try { crashFile.readText().trim() } catch (e: Throwable) { "" }
         } else ""
+        lastCrash.value = crash
+        // v6.3：界面上只留摘要。完整内容点"分享诊断"一键带走，
+        // 不用再在手机上长按拖选几百行日志。
         val log = if (logFile.exists()) {
-            try { logFile.readLines().takeLast(25).joinToString("\n") } catch (e: Throwable) { "" }
-        } else ""
-        val nerr = if (errFile.exists()) {
-            try { errFile.readLines().takeLast(30).joinToString("\n").trim() } catch (e: Throwable) { "" }
+            try { logFile.readLines().filter { it.isNotBlank() }.takeLast(6).joinToString("\n") } catch (e: Throwable) { "" }
         } else ""
         val tail = buildString {
-            if (log.isNotEmpty()) append("\n\n日志：\n").append(log)
-            if (nerr.isNotEmpty()) append("\n\n底层输出：\n").append(nerr)
+            if (log.isNotEmpty()) append("\n\n最近日志：\n").append(log)
         }
         when {
-            crash.isNotEmpty() -> status.value = "上次原生崩溃：\n$crash$tail"
-            tail.isNotEmpty()  -> status.value = "上次运行记录：$tail"
+            crash.isNotEmpty() -> status.value = "上次异常退出：\n" + crash.take(300) + tail
+            tail.isNotEmpty()  -> status.value = "上次运行：$tail"
         }
 
         // v3.2：抓系统 logcat。
@@ -121,6 +121,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (raw.contains("<think>")) return "" to true
         return raw to false
+    }
+
+    /** 读某个诊断文件的末尾 n 行 */
+    private fun readFileTail(name: String, n: Int): String = try {
+        val f = java.io.File(getApplication<android.app.Application>().filesDir, name)
+        if (!f.exists()) "" else f.readLines().takeLast(n).joinToString("\n")
+    } catch (e: Throwable) { "" }
+
+    /**
+     * 把诊断信息拼成一段文本，供"复制/分享"按钮一键带走。
+     * 目的：日志动辄几百行，在手机上长按选择再复制非常难受，
+     * 这里只截最有用的部分（崩溃现场 + 日志末尾 + 底层输出末尾）。
+     */
+    fun buildDiagnostics(): String {
+        val sb = StringBuilder()
+        val app = getApplication<android.app.Application>()
+        sb.appendLine("=== Bonsai Lite 诊断 ===")
+        val dfNow = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.CHINA)
+        sb.appendLine("时间: " + dfNow.format(java.util.Date()))
+        sb.appendLine("机型: " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL)
+        sb.appendLine("系统: Android " + android.os.Build.VERSION.RELEASE + " / SDK " + android.os.Build.VERSION.SDK_INT)
+        sb.appendLine("CPU 核数: " + Runtime.getRuntime().availableProcessors())
+        sb.appendLine("App 版本: 6.3")
+        sb.appendLine("模型: " + (modelPath.value ?: "未导入"))
+        sb.appendLine()
+
+        val crash = readFileTail("last_crash.txt", 12)
+        if (crash.isNotBlank()) {
+            sb.appendLine("--- 崩溃记录 ---")
+            sb.appendLine(crash)
+        }
+        val log = readFileTail("run_log.txt", 40)
+        if (log.isNotBlank()) {
+            sb.appendLine("--- 日志末尾 ---")
+            sb.appendLine(log)
+        }
+        val err = readFileTail("native_stderr.txt", 15)
+        if (err.isNotBlank()) {
+            sb.appendLine("--- 底层输出末尾 ---")
+            sb.appendLine(err)
+        }
+        val lc = readFileTail("logcat_dump.txt", 20)
+        if (lc.isNotBlank()) {
+            sb.appendLine("--- 系统日志 ---")
+            sb.appendLine(lc)
+        }
+        return sb.toString()
     }
 
     /** 读 run_log.txt 尾部若干行 */

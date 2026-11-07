@@ -6,8 +6,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.bonsaiagent.MainViewModel
 import com.example.bonsaiagent.data.AgentSettings
@@ -17,6 +23,7 @@ import com.example.bonsaiagent.data.AgentSettings
 fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
     val s = vm.settings.value
     val scroll = rememberScrollState()
+    val ctx = LocalContext.current
 
     Column(
         Modifier.fillMaxSize().padding(16.dp).verticalScroll(scroll),
@@ -36,6 +43,27 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                 color = if (vm.modelLoaded.value) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.error
             )
+        }
+
+        // v6.3：一键带走诊断信息。日志几百行，长按拖选太痛苦，
+        // 这里直接复制或弹系统分享面板（发给微信/QQ 即可）。
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                val txt = vm.buildDiagnostics()
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("bonsai-diag", txt))
+                Toast.makeText(ctx, "诊断已复制（${txt.length} 字）", Toast.LENGTH_SHORT).show()
+            }) { Text("复制诊断") }
+
+            OutlinedButton(onClick = {
+                val txt = vm.buildDiagnostics()
+                val i = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "Bonsai Lite 诊断")
+                    putExtra(Intent.EXTRA_TEXT, txt)
+                }
+                ctx.startActivity(Intent.createChooser(i, "发送诊断日志"))
+            }) { Text("分享诊断") }
         }
 
         Divider(Modifier.padding(vertical = 8.dp))
