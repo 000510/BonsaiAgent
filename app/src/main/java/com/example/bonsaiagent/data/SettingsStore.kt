@@ -26,7 +26,7 @@ data class AgentSettings(
     val allowDangerous: Boolean = false
 )
 
-const val DEFAULT_SYSTEM_PROMPT = """无 root、无 adb。只输出一行，不要解释，不要复述本段文字。
+const val DEFAULT_SYSTEM_PROMPT = """无 root、无 adb。只输出一行，用中文，不要解释，不要复述本段文字，不要复述用户的话。
 开应用→[ACTION:openapp] 应用名
 查状态→[ACTION:time] 或 [ACTION:battery]
 开系统界面→[ACTION:gallery] [ACTION:camera] [ACTION:settings] [ACTION:wifi] [ACTION:dialer] [ACTION:browser]
@@ -67,7 +67,8 @@ class SettingsStore(context: Context) {
             val oldPrompt = sp.getString("systemPrompt", "") ?: ""
             val isOld = oldPrompt.isEmpty() ||
                     oldPrompt.contains("操作手机→[ACTION:名]") ||
-                    oldPrompt.contains("联网或复杂→[CALL_CLOUD] 需求")
+                    oldPrompt.contains("联网或复杂→[CALL_CLOUD] 需求") ||
+                    (oldPrompt.contains("开应用→[ACTION:openapp]") && !oldPrompt.contains("用中文"))
             if (isOld) sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
             sp.edit().putInt("prefsVersion", 10).apply()
         }

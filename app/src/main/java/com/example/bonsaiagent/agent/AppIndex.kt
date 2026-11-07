@@ -46,7 +46,8 @@ object AppIndex {
      */
     private val ALIAS = mapOf(
         "b站" to "哔哩哔哩", "bilibili" to "哔哩哔哩", "哔哩" to "哔哩哔哩",
-        "bili" to "哔哩哔哩", "小破站" to "哔哩哔哩",
+        "bili" to "哔哩哔哩", "小破站" to "哔哩哔哩", "哔站" to "哔哩哔哩",
+        "哔哩哔哩" to "哔哩哔哩", "bilibili动画" to "哔哩哔哩",
         "网易云" to "网易云音乐", "云音乐" to "网易云音乐",
         "qq音乐" to "QQ音乐",
         "酷狗" to "酷狗音乐",
@@ -171,7 +172,7 @@ object AppIndex {
      * 注意第 3 步要取"最短标签"：手机里同时有「微信」和「微信读书」时，
      * 说「微信」必须命中前者而不是后者。
      */
-    fun find(ctx: Context, spoken: String): Entry? {
+    fun find(ctx: Context, spoken: String, fuzzy: Boolean = false): Entry? {
         ensure(ctx)
         if (entries.isEmpty()) return null
 
@@ -204,7 +205,27 @@ object AppIndex {
         entries.filter { core(norm(it.label)).length >= 2 && qc.contains(core(norm(it.label))) }
             .minByOrNull { it.label.length }?.let { return it }
 
+        // 6) 模糊：字符重合度。
+        //    「哔站」和「哔哩哔哩」硬匹配对不上，但"哔"是重合的。
+        //    只在 fuzzy=true（明确的"打开某应用"句式）时启用 ——
+        //    用户随口说「南京」时手机里装着「南京银行」，绝不能靠模糊去猜。
+        if (fuzzy && qc.length <= 4) {
+            entries.map { it to overlap(qc, it.label) }
+                .filter { it.second >= 0.5 }
+                .sortedWith(compareByDescending<Pair<Entry, Double>> { it.second }
+                    .thenBy { it.first.label.length })
+                .firstOrNull()?.let { return it.first }
+        }
+
         return null
+    }
+
+    /** q 里有百分之多少的字符出现在 label 里 */
+    private fun overlap(qc: String, label: String): Double {
+        val ls = core(norm(label)).toSet()
+        if (ls.isEmpty() || qc.isEmpty()) return 0.0
+        val hit = qc.toSet().count { it in ls }
+        return hit.toDouble() / qc.toSet().size
     }
 
     /** 拉起应用 */

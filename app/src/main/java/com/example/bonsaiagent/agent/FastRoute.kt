@@ -73,7 +73,8 @@ object FastRoute {
         val t = target.trim()
         if (t.isEmpty()) return null
         OPEN_MAP[t]?.let { return Hit.Act(it) }
-        AppIndex.find(ctx, t)?.let { return Hit.Act("openapp", it.label) }
+        // fuzzy=true：这是"打开 X"句式，用户意图明确，可以容忍字形相近
+        AppIndex.find(ctx, t, fuzzy = true)?.let { return Hit.Act("openapp", it.label) }
         return null
     }
 
@@ -105,8 +106,9 @@ object FastRoute {
         }
 
         // 4) 光说一个应用名：「微信」「B站」
+        // 裸说一个应用名才算（不做模糊，避免「南京」误开「南京银行」）
         if (t.length <= 8) {
-            AppIndex.find(ctx, t)?.let { return Hit.Act("openapp", it.label) }
+            AppIndex.find(ctx, t, fuzzy = false)?.let { return Hit.Act("openapp", it.label) }
         }
 
         return null
