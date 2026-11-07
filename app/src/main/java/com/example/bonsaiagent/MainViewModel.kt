@@ -306,7 +306,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 8B 模型没有字数计数器，全靠感觉，实测要求 1000 字只写 700 字就收尾。
         // 这里把要求提到 system 里，并给出"分段"这种可执行的结构，
         // 比单纯重复"1000字"有效得多。只对本次请求生效，不影响普通聊天。
-        val wantLen = Regex("(\d{2,5})\s*字").find(msg)?.groupValues?.get(1)?.toIntOrNull()
+        val wantLen = Regex("""(\d{2,5})\s*字""").find(msg)?.groupValues?.get(1)?.toIntOrNull()
         val sysText = if (wantLen != null && wantLen >= 100) {
             val paras = (wantLen / 150).coerceIn(3, 12)
             "你是中文写作助手。用户要求约${wantLen}字，请分${paras}个自然段写完，" +
