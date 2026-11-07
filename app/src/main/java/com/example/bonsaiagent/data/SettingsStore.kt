@@ -26,8 +26,9 @@ data class AgentSettings(
     val allowDangerous: Boolean = false
 )
 
-const val DEFAULT_SYSTEM_PROMPT = """只回一行中文，不要复述。
-开App写[ACTION:openapp]名字。时间写[ACTION:time]。电量写[ACTION:battery]。联网或复杂写[CALL_CLOUD]需求。其他直接回答。"""
+const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述。
+开App写[ACTION:openapp]名字。时间写[ACTION:time]。电量写[ACTION:battery]。
+联网或复杂写[CALL_CLOUD]需求。其他问题直接用中文回答，不要夹英文单词。"""
 
 class SettingsStore(context: Context) {
     private val sp: SharedPreferences =
@@ -67,7 +68,8 @@ class SettingsStore(context: Context) {
                     oldPrompt.contains("查状态→[ACTION:time]") ||
                     oldPrompt.contains("你是手机助手") ||
                     oldPrompt.contains("要打开某个App") ||
-                    oldPrompt.contains("开App：[ACTION:openapp]")
+                    oldPrompt.contains("开App：[ACTION:openapp]") ||
+                    oldPrompt.contains("开App写[ACTION:openapp]名字。时间写")
             if (isOld) sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
             sp.edit().putInt("prefsVersion", 12).apply()
         }

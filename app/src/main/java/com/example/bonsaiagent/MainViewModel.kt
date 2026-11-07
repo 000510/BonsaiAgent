@@ -508,25 +508,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             worker.join()
             mainHandler.post { genStatus.value = genStatus.value.copy(phase = "完成") }
             // 解析路由指令
-            when (val route = Router.parse(ai.content.value)) {
+            // v10.6 关键修复：解析对象必须是模型真正输出的文本（raw），
+            // 不能是 ai.content.value —— 从 v10.4 起界面内容在流式阶段是空的，
+            // 拿它去解析永远得到"直接回答"，动作全部不执行（血泪教训）。
+            val finalText = extractAnswer(raw.toString()).first
+            val allActions = Router.parseActions(finalText)
+            when (val route = Router.parse(finalText)) {
                 is RouteResult.Cloud -> {
                     mainHandler.post { ai.content.value += "\n\n[→ 已路由云端] ${route.description}\n" }
                     val cloud = CloudClient.chat(s.apiBase, s.deepseekKey, route.description)
                     mainHandler.post { ai.content.value += cloud }
                 }
                 is RouteResult.Action -> {
-                    mainHandler.post { ai.content.value += "\n\n[→ 动作] ${route.name}${route.arg?.let { " ($it)" } ?: ""}\n" }
                     val app = getApplication<android.app.Application>()
-                    var out = Actions.run(app, route.name, route.arg)
-                    // v10.3：模型会把口语应用名翻译坏（实测「bli站」→「Bli Station」）。
-                    // 名字对不上时，别信模型，回头用用户原话再认一次 —— 原话才是准确的。
-                    if (out.startsWith("[找不到应用]") && route.name == "openapp") {
-                        val hit = AppIndex.find(app, msg)
-                        if (hit != null && AppIndex.launch(app, hit.pkg)) {
-                            out = "已为你打开 ${hit.label}。"
+                    val todo = if (allActions.isNotEmpty()) allActions else listOf(route)
+                    val sb = StringBuilder()
+                    for (act in todo) {
+                        if (sb.isNotEmpty()) sb.append("\n")
+                        sb.append("[→ 动作] ").append(act.name)
+                        act.arg?.let { sb.append(" (").append(it).append(")") }
+                        sb.append("\n")
+                        var out = Actions.run(app, act.name, act.arg)
+                        // v10.3：模型会把口语应用名翻译坏（实测「bli站」→「Bli Station」）。
+                        // 名字对不上时别信模型，回头用用户原话再认一次。
+                        if (out.startsWith("[找不到应用]") && act.name == "openapp") {
+                            val hit = AppIndex.find(app, msg)
+                            if (hit != null && AppIndex.launch(app, hit.pkg)) out = "已为你打开 ${hit.label}。"
                         }
+                        sb.append(out)
                     }
-                    mainHandler.post { ai.content.value += out }
+                    val text = sb.toString()
+                    mainHandler.post { ai.content.value = text }
                 }
                 is RouteResult.Exec -> {
                     mainHandler.post { ai.content.value += "\n\n[→ 执行命令] ${route.command}\n" }
@@ -535,8 +547,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 else -> {
                     // 直接回答：这时候才把模型写的东西一次显示出来
-                    val ans = extractAnswer(raw.toString()).first
-                    mainHandler.post { ai.content.value = ans }
+                    val app = getApplication<android.app.Application>()
+                    val trimmed = finalText.trim()
+                    // v10.6：模型有时只回一个应用名（实测问"能刷短视频的是哪个"→ 回「抖音」），
+                    // 没带 [ACTION:openapp] 格式。长度很短且能在应用表里认出来，就当打开处理。
+                    val bare = trimmed.takeIf { it.length in 1..10 && !it.contains("[") }
+                    val hit = bare?.let { AppIndex.find(app, it) }
+                    if (hit != null && AppIndex.launch(app, hit.pkg)) {
+                        mainHandler.post { ai.content.value = "[→ 动作] openapp（模型只回了应用名）\n已为你打开 ${hit.label}。" }
+                    } else {
+                        mainHandler.post { ai.content.value = trimmed }
+                    }
                 }
             }
         }

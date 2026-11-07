@@ -28,6 +28,29 @@ object Router {
     // 同时兼容老格式 [ACTION:gallery]（参数写在括号外）
     private val ACTION_RE = Regex("\\[ACTION:([^\\]]*)\\]")
 
+    /**
+     * v10.6：解析出**所有**动作。
+     *
+     * 实测用户问「现在几点顺便说下还有多少电」，模型会正确地输出
+     * `[ACTION:time] [ACTION:battery]` 两个动作 —— 但老的 parse 只取第一个，
+     * 第二个被白白丢掉。这里全部取出来，让调用方逐个执行。
+     */
+    fun parseActions(output: String): List<RouteResult.Action> {
+        val out = ArrayList<RouteResult.Action>()
+        for (m in ACTION_RE.findAll(output)) {
+            val body = m.groupValues[1].trim()
+            val sep = body.indexOfFirst { it == ' ' || it == '\u3000' || it == ':' || it == '\t' }
+            val name = (if (sep >= 0) body.substring(0, sep) else body).trim().lowercase()
+            val argIn = if (sep >= 0) body.substring(sep + 1).trim() else ""
+            val tail = output.substring(m.range.last + 1)
+                .lineSequence().firstOrNull()?.trim().orEmpty()
+                .takeIf { it.length in 1..20 && it.none { c -> c in "[]" } } ?: ""
+            val arg = argIn.ifBlank { tail }.ifBlank { null }
+            if (name.isNotEmpty()) out.add(RouteResult.Action(name, arg))
+        }
+        return out
+    }
+
     fun parse(output: String): RouteResult {
         // ACTION 优先：它比 EXEC 可靠得多，别被后面的 EXEC 抢走
         ACTION_RE.find(output)?.let { m ->
