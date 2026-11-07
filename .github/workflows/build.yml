@@ -45,7 +45,9 @@ jobs:
           curl -sfL -o /tmp/hpp.tgz "https://github.com/KhronosGroup/Vulkan-Hpp/archive/refs/tags/v1.3.${NDKVK}.tar.gz"
           tar xzf /tmp/hpp.tgz -C /tmp
           sudo cp /tmp/Vulkan-Hpp-1.3.${NDKVK}/vulkan/*.hpp $NINCDIR/vulkan/ && echo "已补齐 Vulkan-Hpp 全套头文件"
-          ls $NINCDIR/vulkan/
+          # SPIRV-Headers 的头文件同理：apt 装在 /usr/include/spirv，交叉编译看不到
+          sudo cp -r /usr/include/spirv $NINCDIR/ && echo "已补齐 spirv 头文件"
+          ls $NINCDIR/ | head -20
 
       - name: 克隆 PrismML llama.cpp（prism 分支）
         run: |
