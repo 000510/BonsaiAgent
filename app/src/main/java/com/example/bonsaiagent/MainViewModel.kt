@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.bonsaiagent.agent.Actions
+import com.example.bonsaiagent.agent.AppIndex
 import com.example.bonsaiagent.agent.CloudClient
 import com.example.bonsaiagent.agent.Executor
 import com.example.bonsaiagent.agent.FastRoute
@@ -67,8 +68,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val lastCrash = mutableStateOf("")
     val chatMessages = mutableStateListOf<ChatMessage>()
     val agentMessages = mutableStateListOf<ChatMessage>()
+    /** 已索引的桌面应用数量（设置页显示，0 表示还没扫到——多半是 <queries> 没生效） */
+    val appCount = mutableStateOf(0)
 
     init {
+        // v10.0：后台扫一遍手机里装了哪些应用，给「打开微信」这类指令用。
+        // 有缓存就直接读缓存（毫秒级），没缓存才真的去问系统。
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val n = AppIndex.all(getApplication()).size
+                val real = if (n == 0) AppIndex.refresh(getApplication()) else n
+                withContext(Dispatchers.Main) { appCount.value = real }
+            } catch (_: Throwable) { /* 扫描失败不影响其它功能 */ }
+        }
+
         // 原生层崩过 / 上次运行到哪一步，这里能直接看到
         val crashFile = java.io.File(app.filesDir, "last_crash.txt")
         val logFile = java.io.File(app.filesDir, "run_log.txt")
@@ -154,6 +167,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 目的：日志动辄几百行，在手机上长按选择再复制非常难受，
      * 这里只截最有用的部分（崩溃现场 + 日志末尾 + 底层输出末尾）。
      */
+    /** 设置页「刷新应用列表」：重新读一遍系统应用清单 */
+    fun refreshApps() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val n = try { AppIndex.refresh(getApplication()) } catch (_: Throwable) { 0 }
+            withContext(Dispatchers.Main) {
+                appCount.value = n
+                status.value = if (n > 0) "已索引 $n 个应用" else
+                    "没扫到应用（检查 manifest 的 <queries> 是否生效）"
+            }
+        }
+    }
+
     fun buildDiagnostics(): String {
         val sb = StringBuilder()
         val app = getApplication<android.app.Application>()
@@ -415,12 +440,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         // v7.5 快路径：高频短指令直接命中，不经过模型。
         // 实测这类指令占 prefill 33 秒的绝大部分，而意图是确定的，查表就够。
-        FastRoute.match(msg)?.let { hit ->
+        FastRoute.match(getApplication(), msg)?.let { hit ->
             when (hit) {
                 is FastRoute.Hit.Answer -> ai.content.value = hit.text
                 is FastRoute.Hit.Act -> {
                     ai.content.value = "[→ 动作] ${hit.action}（快路径，0秒）\n"
-                    ai.content.value += Actions.run(getApplication(), hit.action, null)
+                    ai.content.value += Actions.run(getApplication(), hit.action, hit.arg)
                 }
             }
             genStatus.value = GenStatus(phase = "就绪")

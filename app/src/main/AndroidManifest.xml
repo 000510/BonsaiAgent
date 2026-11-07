@@ -4,6 +4,19 @@
     <!-- 调用 DeepSeek 云端需要联网；本机 API 走 127.0.0.1 需要允许 cleartext -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+        Android 11（API 30）起 package visibility 默认收紧：
+        不声明 <queries> 的话，queryIntentActivities 会「静默返回空列表」，
+        表现为「打开微信」永远认不出来。这里只声明需要看到桌面启动器类应用，
+        不是 QUERY_ALL_PACKAGES，不需要应用商店特别审核。
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:usesCleartextTraffic="true"

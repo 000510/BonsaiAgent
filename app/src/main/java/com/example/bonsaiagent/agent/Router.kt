@@ -24,15 +24,26 @@ sealed class RouteResult {
 
 object Router {
     private val EXEC_RE = Regex("\\[EXEC:\\s*(.+?)\\s*\\]", RegexOption.DOT_MATCHES_ALL)
-    // [ACTION: gallery] 或 [ACTION: browser https://xxx.com]
-    private val ACTION_RE = Regex("\\[ACTION:\\s*([A-Za-z_]+)\\s*([^\\]]*)\\]")
+    // v10.0：括号内允许中文和空格 —— [ACTION:openapp 微信] / [ACTION:相册]
+    // 同时兼容老格式 [ACTION:gallery]（参数写在括号外）
+    private val ACTION_RE = Regex("\\[ACTION:([^\\]]*)\\]")
 
     fun parse(output: String): RouteResult {
         // ACTION 优先：它比 EXEC 可靠得多，别被后面的 EXEC 抢走
         ACTION_RE.find(output)?.let { m ->
-            val name = m.groupValues[1].trim().lowercase()
-            val arg = m.groupValues[2].trim().ifBlank { null }
-            return RouteResult.Action(name, arg)
+            val body = m.groupValues[1].trim()
+            val sep = body.indexOfFirst { it == ' ' || it == '\u3000' || it == ':' || it == '\t' }
+            val name = (if (sep >= 0) body.substring(0, sep) else body).trim().lowercase()
+            val argIn = if (sep >= 0) body.substring(sep + 1).trim() else ""
+
+            // 括号外紧跟的那一小段也可能是应用名：「[ACTION:openapp] 微信」
+            val tail = output.substring(m.range.last + 1)
+                .lineSequence().firstOrNull()?.trim().orEmpty()
+                .takeIf { it.length in 1..20 && it.none { c -> c in "[]" } }
+                ?: ""
+
+            val arg = argIn.ifBlank { tail }.ifBlank { null }
+            if (name.isNotEmpty()) return RouteResult.Action(name, arg)
         }
         if (output.contains("[CALL_CLOUD]")) {
             val desc = output.substringAfter("[CALL_CLOUD]").trim()

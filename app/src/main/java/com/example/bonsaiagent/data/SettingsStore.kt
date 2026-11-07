@@ -26,10 +26,12 @@ data class AgentSettings(
     val allowDangerous: Boolean = false
 )
 
-const val DEFAULT_SYSTEM_PROMPT = """无 root、无 adb。只输出一行，不解释：
-操作手机→[ACTION:名] 名可: time battery gallery camera settings apps wifi dialer browser
-联网或复杂→[CALL_CLOUD] 需求
-其他→直接回答
+const val DEFAULT_SYSTEM_PROMPT = """无 root、无 adb。只输出一行，不要解释，不要复述本段文字。
+开应用→[ACTION:openapp] 应用名
+查状态→[ACTION:time] 或 [ACTION:battery]
+开系统界面→[ACTION:gallery] [ACTION:camera] [ACTION:settings] [ACTION:wifi] [ACTION:dialer] [ACTION:browser]
+联网或太复杂→[CALL_CLOUD] 需求
+能直接答就直接答。
 禁止 [EXEC:] 和 shell 命令。"""
 
 class SettingsStore(context: Context) {
@@ -57,6 +59,17 @@ class SettingsStore(context: Context) {
                     oldPrompt.contains("禁止输出 [EXEC:]")    // v7.3
             if (isOld) sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
             sp.edit().putInt("prefsVersion", 6).apply()
+        }
+        // v10.0：动作协议从「协议名清单」改成「开应用 + 参数」。
+        // 1.5B 会照着「操作手机→[ACTION:名]」这个范例原样复读，
+        // 所以新文案里一个具体例子都不给，只留占位符。
+        if (sp.getInt("prefsVersion", 1) < 10) {
+            val oldPrompt = sp.getString("systemPrompt", "") ?: ""
+            val isOld = oldPrompt.isEmpty() ||
+                    oldPrompt.contains("操作手机→[ACTION:名]") ||
+                    oldPrompt.contains("联网或复杂→[CALL_CLOUD] 需求")
+            if (isOld) sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
+            sp.edit().putInt("prefsVersion", 10).apply()
         }
         return loadInner()
     }

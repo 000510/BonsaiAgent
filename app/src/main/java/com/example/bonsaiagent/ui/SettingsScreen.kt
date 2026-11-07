@@ -35,6 +35,10 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
             Button(onClick = onPickModel) { Text("导入本地模型 (.gguf)") }
             OutlinedButton(onClick = vm::loadModel) { Text("加载模型") }
         }
+        // v10.0：手机里装了哪些应用由系统清单决定，装了新 App 点这里刷新
+        OutlinedButton(onClick = { vm.refreshApps() }) {
+            Text("刷新应用列表（已识别 ${vm.appCount.value} 个）")
+        }
         // 长按可复制：诊断日志太长，复制粘贴比截图清楚得多
         SelectionContainer {
             Text(

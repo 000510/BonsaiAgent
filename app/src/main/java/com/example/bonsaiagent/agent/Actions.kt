@@ -114,6 +114,32 @@ object Actions {
                     "已用浏览器打开 $full"
                 }
 
+                // v10.0：打开任意已装应用。arg 可以是包名，也可以是用户口中的名字
+                // （"微信"/"B站"），统一交给 AppIndex 去认。
+                "openapp", "launch", "start" -> {
+                    val who = arg?.trim().orEmpty()
+                    if (who.isEmpty()) return "[打开失败] 没说要开哪个应用"
+
+                    // 先当包名试（含点号且不像中文）
+                    val direct = if (who.contains('.') && who.none { it.code > 127 }) {
+                        if (AppIndex.launch(ctx, who)) AppIndex.labelOf(ctx, who) else null
+                    } else null
+
+                    if (direct != null) {
+                        "已为你打开 $direct。"
+                    } else {
+                        val hit = AppIndex.find(ctx, who)
+                        if (hit != null && AppIndex.launch(ctx, hit.pkg)) {
+                            "已为你打开 ${hit.label}。"
+                        } else {
+                            val sample = AppIndex.all(ctx).take(12).joinToString("、") { it.label }
+                            "[找不到应用] $who" +
+                                if (sample.isEmpty()) "（应用清单是空的，去设置页点一下「刷新应用列表」）"
+                                else "\n手机里装着的有：$sample …"
+                        }
+                    }
+                }
+
                 else -> "[未知动作] $name\n可用：" + CATALOG.replace("\n", " / ")
             }
         } catch (e: Throwable) {

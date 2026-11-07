@@ -6,6 +6,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -54,176 +57,15 @@ jobs:
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
-
-  # ==========================================================================
-  # 对比实验：同一份源码，分别用 prism 分支和主线各编一个 x86 版 llama-cli，
-  # 跑同一个标准模型。用来判断"llama_decode 静默崩溃"到底是
-  #   ①PrismML prism 分支自己的问题，还是 ②换环境/换模型都能复现的普遍问题。
-  # ==========================================================================
-  verify-decode:
-    strategy:
-      fail-fast: false
-      matrix:
-        branch: [prism, master]
-    runs-on: ubuntu-latest
-    steps:
-      - name: 克隆 llama.cpp（${{ matrix.branch }} 分支）
+      - name: 发布到 Release（手机可直接下载）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git clone --branch ${{ matrix.branch }} --depth 1 https://github.com/PrismML-Eng/llama.cpp llamacpp
-          cd llamacpp
-          git submodule update --init --recursive || true
-
-      - name: 编译 llama-cli（x86，关掉激进指令集）
-        run: |
-          cd llamacpp
-          cmake -B build \
-            -DGGML_NATIVE=OFF \
-            -DGGML_OPENMP=OFF \
-            -DLLAMA_CURL=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF
-          cmake --build build --target llama-cli -j4
-          ls -lh build/bin/
-
-      - name: 下载测试模型（Qwen2.5-0.5B Q4_K_M）
-        run: |
-          curl -sL --max-time 600 -o /tmp/q.gguf \
-            "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf" \
-            || curl -sL --max-time 600 -o /tmp/q.gguf \
-            "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-          ls -lh /tmp/q.gguf
-          head -c 4 /tmp/q.gguf | xxd
-
-      - name: 跑推理（关键：看能不能出字）
-        run: |
-          cd llamacpp
-          echo "========== 参数 =========="
-          ./build/bin/llama-cli --version || true
-          echo "========== 开始推理 =========="
-          set +e
-          timeout 300 ./build/bin/llama-cli \
-            -m /tmp/q.gguf \
-            -p "你好" \
-            -n 32 \
-            -t 2 \
-            -no-cnv \
-            --no-warmup 2>&1 | tail -80
-          echo "========== 退出码: $? =========="
-          echo "如果上面有中文输出，说明这个分支的 decode 在 x86 上是好的"
-
-  # ==========================================================================
-  # ARM64 复现：交叉编译同一份 prism 源码到 aarch64，用 qemu 跑，
-  # 直接看 ARM 上 llama_decode 到底会不会崩、崩在哪。
-  # ==========================================================================
-  repro-arm64:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 拉取代码
-        uses: actions/checkout@v4
-
-      - name: 安装交叉编译器和 qemu
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq g++-aarch64-linux-gnu qemu-user
-
-      - name: 克隆 llama.cpp (prism)
-        run: |
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp llamacpp
-          cd llamacpp && git submodule update --init --recursive || true
-
-      - name: 交叉编译 libllama (aarch64 静态)
-        run: |
-          cd llamacpp
-          cmake -B build-arm \
-            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/cmake-aarch64-toolchain.cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DLLAMA_CURL=OFF \
-            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_APP=OFF
-          cmake --build build-arm --target llama -j4
-          find build-arm -name "*.a" | head -20
-
-      - name: 编译 harness (静态链接)
-        run: |
-          cd llamacpp
-          LIBS=$(find build-arm -name "*.a" | tr '\n' ' ')
-          aarch64-linux-gnu-g++ -O1 -g -std=c++17 -static \
-            -I include -I ggml/include \
-            ../tools/harness.cpp \
-            -Wl,--start-group $LIBS -Wl,--end-group \
-            -lpthread -lm -ldl -o /tmp/harness_arm
-          file /tmp/harness_arm
-
-      - name: 下载测试模型
-        run: |
-          curl -sL --max-time 900 -o /tmp/q.gguf \
-            "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf" \
-            || curl -sL --max-time 900 -o /tmp/q.gguf \
-            "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-          ls -lh /tmp/q.gguf
-
-      - name: qemu 运行 (关键)
-        run: |
-          set +e
-          timeout 900 qemu-aarch64 -L /usr/aarch64-linux-gnu /tmp/harness_arm /tmp/q.gguf "你好" 2>&1 | tail -60
-          echo "=========== exit=$? ==========="
-
-  # ==========================================================================
-  # 分水岭实验：用 Android NDK 编译同一份 harness，在 qemu 里跑。
-  # 如果 NDK 编的也崩 → 编译工具链/优化问题
-  # 如果 NDK 编的正常 → Android 运行时(bionic/Scudo/ART)问题
-  # ==========================================================================
-  repro-ndk:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 拉取代码
-        uses: actions/checkout@v4
-
-      - name: 装环境
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user g++-aarch64-linux-gnu clang
-
-      - name: 克隆 llama.cpp (主线)
-        run: git clone --depth 1 https://github.com/ggml-org/llama.cpp llamacpp
-
-      - name: 用 clang 交叉编译 libllama (aarch64 静态)
-        run: |
-          cd llamacpp
-          cmake -B build-clang \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_C_COMPILER_TARGET=aarch64-linux-gnu \
-            -DCMAKE_CXX_COMPILER_TARGET=aarch64-linux-gnu \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DLLAMA_CURL=OFF \
-            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF
-          cmake --build build-clang --target llama -j4
-
-      - name: 用 clang 编 harness (静态)
-        run: |
-          cd llamacpp
-          LIBS=$(find build-clang -name "*.a" | tr '\n' ' ')
-          clang++ --target=aarch64-linux-gnu -O1 -g -std=c++17 -static \
-            -I include -I ggml/include \
-            ../tools/harness.cpp $LIBS -lpthread -lm -ldl \
-            -o /tmp/harness_clang
-          file /tmp/harness_clang
-
-      - name: 下载测试模型
-        run: |
-          curl -sL --max-time 900 -o /tmp/q.gguf \
-            "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf" \
-            || curl -sL --max-time 900 -o /tmp/q.gguf \
-            "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-          ls -lh /tmp/q.gguf
-
-      - name: qemu 运行 clang 版本
-        run: |
-          set +e
-          timeout 900 qemu-aarch64 /tmp/harness_clang /tmp/q.gguf "hello" 2>&1 | tail -50
-          echo "=========== exit=$? ==========="
+          VER=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle | head -1)
+          echo "version = $VER"
+          cp app/build/outputs/apk/debug/app-debug.apk "BonsaiLite-v$VER.apk"
+          gh release delete "v$VER" --repo ${{ github.repository }} --yes || true
+          gh release create "v$VER" "BonsaiLite-v$VER.apk" \
+            --repo ${{ github.repository }} \
+            --title "BonsaiLite v$VER" \
+            --notes "自动构建 ${{ github.sha }}"
