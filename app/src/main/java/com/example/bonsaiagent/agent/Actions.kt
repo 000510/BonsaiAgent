@@ -102,7 +102,7 @@ object Actions {
     /**
      * 打开相册。
      *
-     * 注意：不能用 Intent(ACTION_VIEW).setType("image/*") —— 那是"打开某张图片"，
+     * 注意：不能用 Intent(ACTION_VIEW).setType("image/…") —— 那是"打开某张图片"，
      * 没给具体文件时系统会弹出文件选择器（实测表现就是跑到文件管理器里翻文件夹，
      * 最后报"打开目标文件失败"）。
      *
