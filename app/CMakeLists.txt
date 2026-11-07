@@ -82,6 +82,16 @@ set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+i8mm" CACHE STRING "" FORCE)
 # ---------------------------------------------------------------------------
 set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 
+# NDK 交叉编译时 CMake 只在 sysroot 里找包，不会看主机的 /usr/share/cmake，
+# 而 SPIRV-Headers / SPIRV-Tools 是系统 apt 包装的，必须显式指路。
+# 缺了会在 find_package 阶段直接失败（实测报 Could not find SPIRV-Headers）。
+if(NOT SPIRV-Headers_DIR AND EXISTS "/usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake")
+    set(SPIRV-Headers_DIR "/usr/share/cmake/SPIRV-Headers" CACHE PATH "" FORCE)
+endif()
+if(NOT SPIRV-Tools_DIR AND EXISTS "/usr/share/cmake/SPIRV-Tools/SPIRV-ToolsConfig.cmake")
+    set(SPIRV-Tools_DIR "/usr/share/cmake/SPIRV-Tools" CACHE PATH "" FORCE)
+endif()
+
 # ALL_VARIANTS（多指令集变体）依赖 BACKEND_DL，静态模式下必须关闭。
 # 静态版用默认基线（armv8-a，已含 NEON，三值 kernel 能用），
 # 代价是拿不到 dotprod/i8mm 的额外加速，先保证能跑。
