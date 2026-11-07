@@ -54,6 +54,14 @@ set(GGML_LLAMAFILE ON CACHE BOOL "" FORCE)
 # GGML_NATIVE 在交叉编译（NDK）下必须 OFF，否则会按编译机的 CPU 生成指令。
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 
+# v6.4：按实测的 CPU 能力指定指令集基线。
+# vivo V2465A 的 /proc/cpuinfo 确认支持 asimddp(dotprod) 和 i8mm，
+# 这两个是量化点积的专用加速指令，官方数据能快 2~4 倍。
+# 之前为了"绝对不 SIGILL"一直用最保守的 armv8-a，等于把这项性能整个扔掉，
+# 实测 prefill 只有 4.4 tok/s（141 token 要 31.8 秒）。
+# 现在按实测能力放开。注意：这是编译期决定，换到不支持这些指令的手机会 SIGILL。
+set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+i8mm" CACHE STRING "" FORCE)
+
 # ALL_VARIANTS（多指令集变体）依赖 BACKEND_DL，静态模式下必须关闭。
 # 静态版用默认基线（armv8-a，已含 NEON，三值 kernel 能用），
 # 代价是拿不到 dotprod/i8mm 的额外加速，先保证能跑。

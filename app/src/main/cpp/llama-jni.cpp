@@ -535,11 +535,11 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     if (want_ctx > 2048u) want_ctx = 2048u;   // 4096 时 KV cache 约 600MB，手机扛不住
     if (want_ctx < 512u)  want_ctx = 512u;
     cparams.n_ctx           = want_ctx;
-    // v6.3：n_batch 退回 128。v6.2 曾提到 256，但 8B 模型下 compute buffer 会跟着
-    // 翻倍，加上 2.18GB 权重和 KV cache，容易触发系统回收 —— 这可能是那一版挂掉的原因。
-    // n_ubatch 保持 128（不超过 n_batch），微批效率的收益仍然保留。
+    // v6.4：ubatch 退回 64。
+    // v6.2/v6.3 把它提到 128 后，生成到 16~21 个 token 会崩；v6.1 用 64 时
+    // 连续生成 22 个 token 都正常。先排除这个变量，提速交给指令集优化。
     cparams.n_batch         = 128;
-    cparams.n_ubatch        = 128;
+    cparams.n_ubatch        = 64;
     cparams.n_threads       = (uint32_t) (n_threads > 0 ? n_threads : 4);
     cparams.n_threads_batch = cparams.n_threads;
     // 主线版本该字段名/枚举可能不同，用默认值（AUTO）即可

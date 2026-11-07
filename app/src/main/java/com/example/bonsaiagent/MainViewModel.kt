@@ -162,7 +162,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sb.appendLine("--- 底层输出末尾 ---")
             sb.appendLine(err)
         }
-        val lc = readFileTail("logcat_dump.txt", 20)
+        // 读全文而不是尾部：崩溃栈 #00 在开头，截尾会把最关键的帧丢掉
+        val lc = try {
+            val f = java.io.File(getApplication<android.app.Application>().filesDir, "logcat_dump.txt")
+            if (f.exists()) f.readText().trim() else ""
+        } catch (e: Throwable) { "" }
         if (lc.isNotBlank()) {
             sb.appendLine("--- 系统日志 ---")
             sb.appendLine(lc)
@@ -192,22 +196,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         fun looksImportant(l: String) = keys.any { l.contains(it, ignoreCase = true) }
 
         val sb = StringBuilder()
+        // crash buffer 要【从头】取：崩溃栈 #00 在最前面，
+        // 之前用 takeLast 把最关键的 native 帧全丢了，只剩一堆 Java 帧。
         val bufs = listOf(
-            listOf("logcat", "-b", "crash", "-d", "-v", "time"),
-            listOf("logcat", "-b", "main", "-d", "-v", "time", "-t", "4000")
+            Triple("logcat", "crash", 90),
+            Triple("logcat", "main", 30)
         )
-        for (cmd in bufs) {
+        for ((cmd, bufName, keep) in bufs) {
+            val args = if (bufName == "crash")
+                listOf(cmd, "-b", "crash", "-d", "-v", "time")
+            else
+                listOf(cmd, "-b", "main", "-d", "-v", "time", "-t", "4000")
             try {
-                val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
-                val out = p.inputStream.bufferedReader().readText()
-                p.waitFor()
-                val kept = out.lines().filter { it.isNotBlank() && looksImportant(it) }.takeLast(45)
+                val pr = ProcessBuilder(args).redirectErrorStream(true).start()
+                val out = pr.inputStream.bufferedReader().readText()
+                pr.waitFor()
+                val matched = out.lines().filter { it.isNotBlank() && looksImportant(it) }
+                val kept = if (bufName == "crash") matched.take(keep) else matched.takeLast(keep)
                 if (kept.isNotEmpty()) {
-                    sb.append("\n[").append(cmd[2]).append("]\n")
+                    sb.append("\n[").append(bufName).append("]\n")
                     sb.append(kept.joinToString("\n"))
                 }
             } catch (e: Throwable) {
-                sb.append("\n[").append(cmd[2]).append("] 读取失败: ").append(e.message)
+                sb.append("\n[").append(bufName).append("] 读取失败: ").append(e.message)
             }
         }
         return sb.toString().trim()
