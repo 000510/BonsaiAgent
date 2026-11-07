@@ -472,8 +472,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val t0 = System.currentTimeMillis()
             var firstTokAt = 0L
             var tokCount = 0
+            // v10.41：路由页限制输出长度。
+            // 一条动作指令不超过 15 个 token，给 128 已经很宽松；
+            // 之前沿用全局的 2048，模型一旦啰嗦（复读提示词、自我解释），
+            // 5 tok/s × 几百个 token 就是几十秒的纯浪费。
+            val routeMaxTok = minOf(s.maxTokens, 128)
             val worker = Thread(null, Runnable {
-                Llama.generate(sysPrefix, prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
+                Llama.generate(sysPrefix, prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, routeMaxTok) {
                     raw.append(it)
                     tokCount++
                     if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()

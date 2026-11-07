@@ -586,11 +586,16 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     if (want_ctx > 3072u) want_ctx = 3072u;
     if (want_ctx < 512u)  want_ctx = 512u;
     cparams.n_ctx           = want_ctx;
-    // v6.4：ubatch 退回 64。
-    // v6.2/v6.3 把它提到 128 后，生成到 16~21 个 token 会崩；v6.1 用 64 时
-    // 连续生成 22 个 token 都正常。先排除这个变量，提速交给指令集优化。
-    cparams.n_batch         = 128;
-    cparams.n_ubatch        = 64;
+    // v10.41：重新尝试放大 batch。
+    // v6.2/v6.3 曾把 ubatch 提到 128 后崩在 16~21 个 token 处，但当时真正的
+    // 凶手是 FP16 KV 溢出（v6.5 修）和 sgemm 断言（v5.2 修）—— 那两个都解决后，
+    // 这个限制就是多余的保守。
+    //
+    // 为什么值得试：prefill 是批量矩阵乘，ubatch 越大算力利用率越高。
+    // 实测 prefill 只有 8 tok/s，远低于 CPU 该有的水平（正常应 20~40），
+    // 说明批量太小、算力没喂饱。
+    cparams.n_batch         = 256;
+    cparams.n_ubatch        = 128;
 
     // v6.5 关键修复：KV cache 改用 FP32。
     // 崩溃现场：
