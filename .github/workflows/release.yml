@@ -1,0 +1,41 @@
+name: publish-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'source run id (artifact owner)'
+        required: true
+      tag:
+        description: 'release tag'
+        required: true
+        default: 'v9.2'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载上一个 run 的 APK 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: app-debug
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./out
+
+      - name: 创建 Release 并上传
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la ./out
+          cp ./out/app-debug.apk ./out/BonsaiLite-${{ inputs.tag }}.apk
+          gh release delete ${{ inputs.tag }} --repo ${{ github.repository }} --yes || true
+          gh release create ${{ inputs.tag }} \
+            ./out/BonsaiLite-${{ inputs.tag }}.apk \
+            --repo ${{ github.repository }} \
+            --title "BonsaiLite ${{ inputs.tag }}" \
+            --notes "自动发布 ${{ inputs.tag }}"
