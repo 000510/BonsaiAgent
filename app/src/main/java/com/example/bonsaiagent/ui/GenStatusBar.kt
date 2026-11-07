@@ -84,12 +84,21 @@ fun GenStatusBar(vm: MainViewModel) {
                 if (st.phase == "生成中" || st.phase == "思考中") {
                     Spacer(Modifier.width(4.dp))
                     Text("%.1f".format(st.tokPerSec), fontSize = 11.sp)
+                } else if (st.phase == "处理输入") {
+                    Spacer(Modifier.width(4.dp))
+                    Text("%.1f".format(st.elapsedSec), fontSize = 11.sp)
                 }
             } else {
                 Spacer(Modifier.width(6.dp))
                 Text(
                     buildString {
                         append(st.phase)
+                        // prefill 阶段显示实时秒数 —— 这就是 TTFT，用来验证前缀缓存省了多少
+                        if (st.phase == "处理输入") {
+                            append("  ")
+                            append("%.1f".format(st.elapsedSec))
+                            append("s")
+                        }
                         if (st.phase == "生成中" || st.phase == "思考中") {
                             append("  ")
                             append("%.1f".format(st.tokPerSec))

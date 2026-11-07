@@ -33,7 +33,9 @@ data class GenStatus(
     val phase: String = "就绪",
     val tokPerSec: Float = 0f,
     val tokens: Int = 0,
-    val chars: Int = 0
+    val chars: Int = 0,
+    /** 本轮已耗时（秒）。prefill 阶段就是 TTFT，用来验证前缀缓存到底省了多少 */
+    val elapsedSec: Double = 0.0
 )
 
 // 全局自增，保证每条消息的 id 唯一 —— LazyColumn 的 key 必须是能存进 Bundle 的简单类型
@@ -358,6 +360,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }, "llama-gen")   // v2.2: 回退自定义栈大小(32MB)，用默认栈
             worker.start()
+            while (worker.isAlive) {
+                val el = (System.currentTimeMillis() - t0) / 1000.0
+                val cur = genStatus.value
+                if (cur.phase == "处理输入") {
+                    genStatus.value = cur.copy(elapsedSec = el)
+                }
+                delay(120)
+            }
             worker.join()
             val st = genStatus.value
             mainHandler.post { genStatus.value = st.copy(phase = "完成") }
@@ -415,6 +425,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         genStatus.value = GenStatus(phase = "处理输入")
         viewModelScope.launch(Dispatchers.IO) {
             val raw = StringBuilder()
+            val t0 = System.currentTimeMillis()
             var firstTokAt = 0L
             var tokCount = 0
             val worker = Thread(null, Runnable {
@@ -434,6 +445,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }, "llama-gen")   // v2.2: 回退自定义栈大小(32MB)，用默认栈
             worker.start()
+            while (worker.isAlive) {
+                val el = (System.currentTimeMillis() - t0) / 1000.0
+                val cur = genStatus.value
+                if (cur.phase == "处理输入") {
+                    genStatus.value = cur.copy(elapsedSec = el)
+                }
+                delay(120)
+            }
             worker.join()
             mainHandler.post { genStatus.value = genStatus.value.copy(phase = "完成") }
             // 解析路由指令
