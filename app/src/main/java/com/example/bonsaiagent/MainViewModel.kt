@@ -298,7 +298,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (body.isBlank()) continue
             val role = if (m.role == "user") "user" else "assistant"
             val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
-            if (estChars + piece.length > 900) break           // 约 900 token，给回答留出余量
+            if (estChars + piece.length > 500) break           // 约 500 token，把上下文空间让给长文生成
             history.add(0, piece)
             estChars += piece.length
         }
@@ -307,6 +307,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             append("你是手机本地助手，回答简洁准确。<|im_end|>\n")
             for (h in history) append(h)
             append("<|im_start|>assistant\n")
+            // v6.6：跳过思考阶段。
+            // Ternary-Bonsai 是推理模型，会在 <think>...</think> 里先想一大段。
+            // 实测让它自由思考：写 1000 字作文时闷头想了 200 个 token（约 30 秒）
+            // 然后崩溃，界面上一直显示"思考中…"，用户什么也看不到。
+            // 这里直接把思维链的结尾预填进去，模型会认为思考已结束，立刻开始写正文。
+            // 代价：复杂推理的质量会略降；收益：少等半分钟，且避开这条崩溃路径。
+            append("<think>\n\n</think>\n")
         }
         genStatus.value = GenStatus(phase = "处理输入")
         viewModelScope.launch(Dispatchers.IO) {

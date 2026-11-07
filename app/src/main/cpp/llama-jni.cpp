@@ -180,8 +180,11 @@ void __wrap___assert(const char* file, int line, const char* expr) {
 //     - 线程名含 llama/ggml/bonsai  → 是我们在跑推理，记录后退出
 //     - 其它线程（main/GC/... 即 ART）→ 原样转发给 ART 自己的 handler
 // ---------------------------------------------------------------------------
-static struct sigaction g_old_sa[4];
-static int              g_old_sig[4] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE};
+// v6.6：原来只接了 SEGV/BUS/ILL/FPE，漏掉了 SIGABRT ——
+// 而 ggml 的 GGML_ABORT 最终就是走 abort()，等于把最常见的一类死因放过去了。
+// 补上 SIGABRT / SIGSYS / SIGTRAP，做到"任何异常终止都会留记录"。
+static struct sigaction g_old_sa[7];
+static int              g_old_sig[7] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGSYS, SIGTRAP};
 
 static void fault_handler(int sig, siginfo_t* si, void* uc) {
     char tname[64] = {0};
@@ -244,7 +247,7 @@ static void install_fault_handlers() {
     sa.sa_sigaction = fault_handler;
     sa.sa_flags     = SA_SIGINFO | SA_RESTART;   // 不加 SA_ONSTACK：栈溢出已排除
     sigemptyset(&sa.sa_mask);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 7; i++) {
         ::sigaction(g_old_sig[i], &sa, &g_old_sa[i]);
     }
 }
@@ -532,7 +535,10 @@ Java_com_example_bonsaiagent_llm_Llama_init(
 
     llama_context_params cparams = llama_context_default_params();
     uint32_t want_ctx = n_ctx > 0 ? (uint32_t) n_ctx : 2048u;
-    if (want_ctx > 2048u) want_ctx = 2048u;   // 4096 时 KV cache 约 600MB，手机扛不住
+    // v6.6：上限提到 3072。用户写 1000 字作文需要约 1400 token 的生成预算，
+    // 2048 上下文塞进历史后只剩一千出头，长文会被硬截断（表现为"字数明显少"）。
+    // FP32 KV cache 下 3072 约多占 900MB，可用内存 5GB 撑得住。
+    if (want_ctx > 3072u) want_ctx = 3072u;
     if (want_ctx < 512u)  want_ctx = 512u;
     cparams.n_ctx           = want_ctx;
     // v6.4：ubatch 退回 64。
@@ -778,7 +784,14 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     int n_gen = 0;
 
     for (int i = 0; i < budget; i++) {
-        if (i % 8 == 0) {
+        // v6.6：把当前 token 序号写进 stage。
+        // 崩溃时信号处理器会带上 stage，等于告诉我们精确崩在生成的第几个 token。
+        {
+            char sb[32];
+            snprintf(sb, sizeof(sb), "gen:%d", i);
+            set_stage(sb);
+        }
+        if (i % 4 == 0) {
             log_line("生成中… 第 %d 个 token，可用内存 %ld MB", i, mem_available_mb());
         }
         llama_token next = llama_sampler_sample(smpl, st->ctx, -1);
