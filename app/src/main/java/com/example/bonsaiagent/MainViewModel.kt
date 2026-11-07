@@ -506,7 +506,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 is RouteResult.Action -> {
                     mainHandler.post { ai.content.value += "\n\n[→ 动作] ${route.name}${route.arg?.let { " ($it)" } ?: ""}\n" }
                     val app = getApplication<android.app.Application>()
-                    val out = Actions.run(app, route.name, route.arg)
+                    var out = Actions.run(app, route.name, route.arg)
+                    // v10.3：模型会把口语应用名翻译坏（实测「bli站」→「Bli Station」）。
+                    // 名字对不上时，别信模型，回头用用户原话再认一次 —— 原话才是准确的。
+                    if (out.startsWith("[找不到应用]") && route.name == "openapp") {
+                        val hit = AppIndex.find(app, msg)
+                        if (hit != null && AppIndex.launch(app, hit.pkg)) {
+                            out = "已为你打开 ${hit.label}。"
+                        }
+                    }
                     mainHandler.post { ai.content.value += out }
                 }
                 is RouteResult.Exec -> {

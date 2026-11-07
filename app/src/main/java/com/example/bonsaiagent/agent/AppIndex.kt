@@ -48,7 +48,8 @@ object AppIndex {
         "b站" to "哔哩哔哩", "bilibili" to "哔哩哔哩", "哔哩" to "哔哩哔哩",
         "bili" to "哔哩哔哩", "小破站" to "哔哩哔哩", "哔站" to "哔哩哔哩",
         "哔哩哔哩" to "哔哩哔哩", "bilibili动画" to "哔哩哔哩",
-        "bil" to "哔哩哔哩", "blbl" to "哔哩哔哩",
+        "bil" to "哔哩哔哩", "blbl" to "哔哩哔哩", "bli" to "哔哩哔哩",
+        "blibli" to "哔哩哔哩", "bilibli" to "哔哩哔哩",
         "网易云" to "网易云音乐", "云音乐" to "网易云音乐",
         "qq音乐" to "QQ音乐",
         "酷狗" to "酷狗音乐",
@@ -217,6 +218,18 @@ object AppIndex {
                 }
         }
 
+        // 6.5) 英文缩写兜底：「bli」「bil」都是「bilibili」的子序列。
+        //      用户打英文应用名时经常漏字母或换顺序，穷举变体永远补不完。
+        if (qc.length in 3..12 && qc.all { it in 'a'..'z' }) {
+            ALIAS.entries
+                .filter { (k, _) -> core(norm(k)).length >= qc.length && isSubsequence(qc, core(norm(k))) }
+                .maxByOrNull { it.key.length }
+                ?.let { (_, target) ->
+                    val tn = norm(target)
+                    entries.firstOrNull { norm(it.label) == tn }?.let { return it }
+                }
+        }
+
         // 6) 模糊：字符重合度。
         //    「哔站」和「哔哩哔哩」硬匹配对不上，但"哔"是重合的。
         //    只在 fuzzy=true（明确的"打开某应用"句式）时启用 ——
@@ -234,6 +247,15 @@ object AppIndex {
         }
 
         return null
+    }
+
+    /** a 是不是 b 的子序列（保持顺序、可跳过字符） */
+    private fun isSubsequence(a: String, b: String): Boolean {
+        var i = 0
+        for (c in b) {
+            if (i < a.length && a[i] == c) i++
+        }
+        return i == a.length
     }
 
     /** q 里有百分之多少的字符出现在 label 里 */
