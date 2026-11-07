@@ -410,6 +410,44 @@ Java_com_example_bonsaiagent_llm_Llama_setBackendPath(JNIEnv* env, jobject, jstr
     }
 }
 
+// ---------------------------------------------------------------------------
+// v7.1：UTF-8 边界处理
+//
+// llama_token_to_piece 返回的是"这个 token 对应的字节"，而 token 边界不一定
+// 落在字符边界上 —— 一个汉字常被切成两个 token，前半截是非法 UTF-8。
+// 直接丢给 env->NewStringUTF() 会让 ART 的 JNI 校验失败并 abort 整个进程
+// （实测日志表现为 SIGABRT、stage=gen:1、piece_len=2 而内容是乱码）。
+//
+// 做法：跨 token 累积字节，只有凑成完整 UTF-8 字符才交给上层。
+// 这与 llama.cpp 官方 CLI 的处理方式一致。
+// ---------------------------------------------------------------------------
+static std::string g_utf8Pending;
+
+// 从 s 里取出所有完整的 UTF-8 字符，未完成的尾部留在 s 中
+static std::string take_complete_utf8(std::string& s) {
+    size_t i = 0, last = 0;
+    while (i < s.size()) {
+        unsigned char c = (unsigned char) s[i];
+        int need;
+        if (c < 0x80)                    need = 0;
+        else if ((c & 0xE0) == 0xC0)     need = 1;
+        else if ((c & 0xF0) == 0xE0)     need = 2;
+        else if ((c & 0xF8) == 0xF0)     need = 3;
+        else { i++; last = i; continue; }        // 非法首字节，跳过
+        if (i + (size_t) need >= s.size()) break; // 还没收全，等下一个 token
+        bool ok = true;
+        for (int k = 1; k <= need; k++) {
+            if (((unsigned char) s[i + k] & 0xC0) != 0x80) { ok = false; break; }
+        }
+        if (!ok) { i++; last = i; continue; }      // 继续字节不合法，丢弃首字节
+        i += (size_t) need + 1;
+        last = i;
+    }
+    std::string out = s.substr(0, last);
+    s.erase(0, last);
+    return out;
+}
+
 // 首次真正使用前初始化 backend（会按 GGML_BACKEND_PATH dlopen 各指令集变体）
 static void ensure_backend() {
     if (g_backend_ready) return;
@@ -612,6 +650,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
 
     g_lastError.clear();
     set_stage("tokenize");
+    g_utf8Pending.clear();   // 每轮重新累积，避免上一轮残留的半个字符串进来
     log_line("----- generate 开始，可用内存 %ld MB -----", mem_available_mb());
 
     // v6.2：再打一次 CPU 指令集能力。
@@ -813,11 +852,16 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
 
         int len = llama_token_to_piece(vocab, next, buf, (int32_t) sizeof(buf), 0, false);
         if (len > 0) {
-            full.append(buf, (size_t) len);
-            if (g_cbObj && g_cbMethod) {
-                jstring jp = env->NewStringUTF(std::string(buf, (size_t) len).c_str());
-                env->CallVoidMethod(g_cbObj, g_cbMethod, jp);
-                env->DeleteLocalRef(jp);
+            // 累积字节，只把凑完整的 UTF-8 字符交给上层 —— 见 take_complete_utf8 说明
+            g_utf8Pending.append(buf, (size_t) len);
+            std::string pieceChunk = take_complete_utf8(g_utf8Pending);
+            if (!pieceChunk.empty()) {
+                full += pieceChunk;
+                if (g_cbObj && g_cbMethod) {
+                    jstring jp = env->NewStringUTF(pieceChunk.c_str());
+                    env->CallVoidMethod(g_cbObj, g_cbMethod, jp);
+                    env->DeleteLocalRef(jp);
+                }
             }
         }
 

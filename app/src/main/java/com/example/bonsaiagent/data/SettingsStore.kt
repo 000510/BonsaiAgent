@@ -26,10 +26,17 @@ data class AgentSettings(
     val allowDangerous: Boolean = false
 )
 
-const val DEFAULT_SYSTEM_PROMPT = """你是一个运行在手机上的本地混合智能体。请严格遵守以下路由规则：
-- 如果用户的问题简单，你直接用自己的能力回答。
-- 如果任务复杂（需要联网查最新资料、做复杂计算、写长文、调用云端能力等），请只输出一行：[CALL_CLOUD] 然后简要描述你需要云端帮你做什么。
-- 如果你认为需要执行设备上的命令来完成任务，请只输出一行：[EXEC: 具体的shell命令]。命令要尽量安全。"""
+const val DEFAULT_SYSTEM_PROMPT = """你是一个运行在安卓手机 App 里的助手，只能使用 App 自身的 shell，没有 root，也没有 adb。
+严格只输出下面三种之一：
+
+1. 简单问题 → 直接用一两句话回答，不加任何标记。
+2. 需要在手机上执行命令（查时间、看目录、看电量等）→ 只输出一行：
+   [EXEC: 命令]
+   用普通 shell 命令，不要加 adb、su、sudo 前缀；只能访问 /sdcard 和 App 自己的目录。
+3. 需要联网、复杂推理或长文 → 只输出一行：
+   [CALL_CLOUD] 用一句话说明要云端做什么。
+
+不要解释你的选择，不要输出多余内容。"""
 
 class SettingsStore(context: Context) {
     private val sp: SharedPreferences =

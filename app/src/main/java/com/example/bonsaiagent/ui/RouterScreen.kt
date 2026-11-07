@@ -18,6 +18,7 @@ fun RouterScreen(vm: MainViewModel) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         // 路由说明卡片
         Surface(
@@ -58,5 +59,15 @@ fun RouterScreen(vm: MainViewModel) {
                 input = ""
             }) { Text("执行") }
         }
+    }
+
+    // v7.1：Agent 页也挂上推理状态条（等它跑的时候至少知道在干什么、多快）
+    Box(
+        Modifier
+            .align(Alignment.TopEnd)
+            .padding(top = 8.dp, end = 8.dp)
+    ) {
+        GenStatusBar(vm)
+    }
     }
 }
