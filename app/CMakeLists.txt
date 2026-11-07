@@ -67,6 +67,21 @@ set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 # 现在按实测能力放开。注意：这是编译期决定，换到不支持这些指令的手机会 SIGILL。
 set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+i8mm" CACHE STRING "" FORCE)
 
+# ---------------------------------------------------------------------------
+# v9.0 实验：开启 Vulkan 后端（GPU 加速）
+#
+# 背景：CPU 侧实测 8 tok/s，1 线程与 8 线程速度相同 —— 确认是内存带宽墙，
+# 且 PQ2_0 的 CPU vec_dot 是 reference kernel（先反量化成 float 再算），
+# 2-bit 只省了带宽、没省算力，CPU 路线到头。
+#
+# 核对了 prism 分支 ggml-vulkan.cpp：PQ2_0 的 pipeline 是完整的
+# （mul_mat_vec_pq2_0_f32_f32 / dequant_pq2_0 / get_rows_pq2_0_f32 都在），
+# 不是残缺实现，所以值得试。
+#
+# 保留 CPU 后端（不开 VULKAN_ONLY），GPU 跑不动时还能退回。
+# ---------------------------------------------------------------------------
+set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+
 # ALL_VARIANTS（多指令集变体）依赖 BACKEND_DL，静态模式下必须关闭。
 # 静态版用默认基线（armv8-a，已含 NEON，三值 kernel 能用），
 # 代价是拿不到 dotprod/i8mm 的额外加速，先保证能跑。
