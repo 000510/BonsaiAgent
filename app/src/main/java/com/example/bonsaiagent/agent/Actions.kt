@@ -49,14 +49,7 @@ object Actions {
 
                 "battery" -> battery(ctx)
 
-                "gallery", "photos", "album" -> {
-                    val i = Intent(Intent.ACTION_VIEW).apply {
-                        type = "image/*"
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    ctx.startActivity(i)
-                    "已为你打开相册。"
-                }
+                "gallery", "photos", "album" -> openGallery(ctx)
 
                 "camera" -> {
                     val i = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
@@ -103,6 +96,56 @@ object Actions {
             }
         } catch (e: Throwable) {
             "[动作执行失败] $name：${e.javaClass.simpleName} ${e.message}"
+        }
+    }
+
+    /**
+     * 打开相册。
+     *
+     * 注意：不能用 Intent(ACTION_VIEW).setType("image/*") —— 那是"打开某张图片"，
+     * 没给具体文件时系统会弹出文件选择器（实测表现就是跑到文件管理器里翻文件夹，
+     * 最后报"打开目标文件失败"）。
+     *
+     * 正确入口是 CATEGORY_APP_GALLERY（API 15+ 的系统标准方式），
+     * 找不到再按常见厂商包名兜底。
+     */
+    private fun openGallery(ctx: Context): String {
+        // 1) 系统标准入口
+        try {
+            val i = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_APP_GALLERY)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (i.resolveActivity(ctx.packageManager) != null) {
+                ctx.startActivity(i)
+                return "已为你打开相册。"
+            }
+        } catch (_: Throwable) { /* 继续兜底 */ }
+
+        // 2) 常见厂商相册包名
+        val candidates = listOf(
+            "com.vivo.gallery", "com.android.gallery3d", "com.miui.gallery",
+            "com.coloros.gallery3d", "com.oppo.gallery3d", "com.huawei.photos",
+            "com.google.android.apps.photos", "com.samsung.android.gallery3d"
+        )
+        for (pkg in candidates) {
+            try {
+                val li = ctx.packageManager.getLaunchIntentForPackage(pkg) ?: continue
+                li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                ctx.startActivity(li)
+                return "已为你打开相册。"
+            } catch (_: Throwable) { /* 试下一个 */ }
+        }
+
+        // 3) 兜底：图库内容 provider
+        return try {
+            ctx.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("content://media/internal/images/media"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            "已尝试打开相册。"
+        } catch (e: Throwable) {
+            "[打开相册失败] 这台设备上没找到可用的相册入口：${e.message}"
         }
     }
 

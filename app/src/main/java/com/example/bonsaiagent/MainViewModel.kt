@@ -383,7 +383,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (body.isBlank()) continue
             val role = if (m.role == "user") "user" else "assistant"
             val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
-            if (aChars + piece.length > 400) break
+            if (aChars + piece.length > 200) break   // v7.4：Agent 每轮基本独立，历史压到 200 字符，prefill 少一半
             aHistory.add(0, piece)
             aChars += piece.length
         }
