@@ -51,7 +51,7 @@ fun GenStatusBar(vm: MainViewModel) {
 
     val dotColor = when (st.phase) {
         "加载中" -> MaterialTheme.colorScheme.tertiary
-        "生成中" -> MaterialTheme.colorScheme.primary
+        "生成中", "思考中" -> MaterialTheme.colorScheme.primary
         "完成"   -> MaterialTheme.colorScheme.secondary
         else     -> MaterialTheme.colorScheme.outline
     }
@@ -81,7 +81,7 @@ fun GenStatusBar(vm: MainViewModel) {
             Text("●", color = dotColor, fontSize = 10.sp)
 
             if (minimized) {
-                if (st.phase == "生成中") {
+                if (st.phase == "生成中" || st.phase == "思考中") {
                     Spacer(Modifier.width(4.dp))
                     Text("%.1f".format(st.tokPerSec), fontSize = 11.sp)
                 }
@@ -90,7 +90,7 @@ fun GenStatusBar(vm: MainViewModel) {
                 Text(
                     buildString {
                         append(st.phase)
-                        if (st.phase == "生成中") {
+                        if (st.phase == "生成中" || st.phase == "思考中") {
                             append("  ")
                             append("%.1f".format(st.tokPerSec))
                             append(" tok/s  ")

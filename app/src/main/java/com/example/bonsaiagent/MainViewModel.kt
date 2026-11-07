@@ -106,6 +106,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }, "logcat-dump").start()
     }
 
+    /**
+     * Ternary-Bonsai 这类推理模型的输出形如：
+     *   <think>思考过程……</think>正式回答
+     * 界面上只展示正式回答；还在思考时给一句提示。
+     * 普通模型（Qwen 等）不含这些标记，会原样返回。
+     *
+     * @return (要显示的文本, 是否还在思考)
+     */
+    private fun extractAnswer(raw: String): Pair<String, Boolean> {
+        val close = raw.indexOf("</think>")
+        if (close >= 0) {
+            return raw.substring(close + 8).trimStart() to false
+        }
+        if (raw.contains("<think>")) return "" to true
+        return raw to false
+    }
+
     /** 读 run_log.txt 尾部若干行 */
     private fun readLogTail(n: Int = 30): String = try {
         val f = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
@@ -246,12 +263,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     tokCount++
                     // 速度只从"第一个字出来之后"开始算，否则会把 prefill 时间摊进去，显得很慢
                     if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()
-                    val txt = buf.toString()
+                    val (answer, thinking) = extractAnswer(buf.toString())
+                    val show = if (thinking) "（思考中…）" else answer
                     val sec = (System.currentTimeMillis() - firstTokAt) / 1000.0
                     val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
-                    val snap = GenStatus("生成中", speed, tokCount, txt.length)
+                    val snap = GenStatus(if (thinking) "思考中" else "生成中", speed, tokCount, show.length)
                     mainHandler.post {
-                        ai.content.value = txt
+                        ai.content.value = show
                         genStatus.value = snap
                     }
                 }
@@ -288,12 +306,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     raw.append(it)
                     tokCount++
                     if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()
-                    val txt = raw.toString()
+                    val (answer, thinking) = extractAnswer(raw.toString())
+                    val show = if (thinking) "（思考中…）" else answer
                     val sec = (System.currentTimeMillis() - firstTokAt) / 1000.0
                     val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
-                    val snap = GenStatus("生成中", speed, tokCount, txt.length)
+                    val snap = GenStatus(if (thinking) "思考中" else "生成中", speed, tokCount, show.length)
                     mainHandler.post {
-                        ai.content.value = txt
+                        ai.content.value = show
                         genStatus.value = snap
                     }
                 }

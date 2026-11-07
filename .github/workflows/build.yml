@@ -38,6 +38,12 @@ jobs:
           cd llamacpp
           git submodule update --init --recursive || true
 
+      - name: 修补 sgemm 参数断言（改成优雅回退）
+        run: |
+          cd app/src/main/cpp/llamacpp
+          ls -l ggml/src/ggml-cpu/llamafile/sgemm.cpp
+          python3 "$GITHUB_WORKSPACE/tools/patch_sgemm.py" ggml/src/ggml-cpu/llamafile/sgemm.cpp
+
       - name: 编译 Debug APK
         uses: gradle/gradle-build-action@v3
         with:

@@ -45,17 +45,12 @@ set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 # OpenMP 仍关闭：llama.cpp 自己用 std::thread 线程池，不需要 OpenMP。
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 
-# v5.2 关键：关闭 llamafile 的高性能 GEMM。
-# 崩溃现场（v5.1 拿到的断言）：
-#   ggml/src/ggml-cpu/llamafile/sgemm.cpp:4165
-#   bool llamafile_sgemm(...) 断言失败: ldb >= k
-# 它要求 B 矩阵行跨距 >= 内积维度 k，但 Ternary-Bonsai 这种三值模型在
-# mul_mat 时给不出这个形状，于是断言直接 abort。
-# 这是 prism 分支额外引入的加速层，不是我们代码的问题；
-# 关掉后退回 ggml 标准 GEMM + NEON vec_dot 路径，结果一样正确。
-# 代价：prompt 处理（prefill）会比启用时慢一些，逐字生成几乎不受影响
-# （生成是带宽瓶颈，本来就不吃 GEMM 的红利）。
-set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
+# v6.1：重新启用 llamafile 高性能 GEMM。
+# v5.2 曾整个关掉它来绕开 "sgemm.cpp:4165 断言失败: ldb >= k"，
+# 代价是 prefill 塌方 —— 实测 8B 模型 93 个 token 要 36 秒，比逐字生成还慢。
+# 现在改为打补丁（tools/patch_sgemm.py）：形状不满足时 return false 让调用方
+# 回退通用路径，而不是 assert 崩掉。既保住加速，又不会崩。
+set(GGML_LLAMAFILE ON CACHE BOOL "" FORCE)
 # GGML_NATIVE 在交叉编译（NDK）下必须 OFF，否则会按编译机的 CPU 生成指令。
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 
