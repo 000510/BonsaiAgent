@@ -302,9 +302,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             history.add(0, piece)
             estChars += piece.length
         }
+        // v6.7：如果用户指定了字数（"写600字""1000字作文"），临时加强约束。
+        // 8B 模型没有字数计数器，全靠感觉，实测要求 1000 字只写 700 字就收尾。
+        // 这里把要求提到 system 里，并给出"分段"这种可执行的结构，
+        // 比单纯重复"1000字"有效得多。只对本次请求生效，不影响普通聊天。
+        val wantLen = Regex("(\d{2,5})\s*字").find(msg)?.groupValues?.get(1)?.toIntOrNull()
+        val sysText = if (wantLen != null && wantLen >= 100) {
+            val paras = (wantLen / 150).coerceIn(3, 12)
+            "你是中文写作助手。用户要求约${wantLen}字，请分${paras}个自然段写完，" +
+            "每段约150字，务必写满${wantLen}字以上，不要提前收尾，不要重复。"
+        } else {
+            "你是手机本地助手，回答简洁准确。"
+        }
         val prompt = buildString {
             append("<|im_start|>system\n")
-            append("你是手机本地助手，回答简洁准确。<|im_end|>\n")
+            append(sysText).append("<|im_end|>\n")
             for (h in history) append(h)
             append("<|im_start|>assistant\n")
             // v6.6：跳过思考阶段。
