@@ -8,7 +8,7 @@ import java.util.concurrent.TimeUnit
  * 安全设计（v7.0 重写）
  * ---------------------
  * 本地 8B 模型本身不可靠，可能被"帮我清理一下存储"这类话诱导出破坏性命令。
- * 原来的黑名单只有 10 个字符串，`rm -rf ~`、`rm -rf /sdcard/*`、`pm uninstall`、
+ * 原来的黑名单只有 10 个字符串，`rm -rf ~`、`rm -rf /sdcard/…`、`pm uninstall`、
  * `curl xx | sh` 全都拦不住，而且加个空格就能绕过。
  *
  * 现在改成三层：
