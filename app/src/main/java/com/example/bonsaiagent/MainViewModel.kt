@@ -358,16 +358,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 之前只把当前这一句丢给模型，模型天生"失忆"——你说"饿了"，它不知道你刚才
         // 说过什么，只能给一句通用回复，看起来就像智力下降。
         // 上下文只有 2048 token，所以只取最近若干轮，并按字符数粗估截断。
+        // ★ v10.13：历史长度从 500 字符砍到 200，并且最多 2 轮。
+        //
+        // 为什么：KV 缓存只能缓存 system 那段（固定 20 token），
+        // 历史每轮都变，没法缓存 —— 全部要重新 prefill。
+        // 实测第二轮带上一轮的 200 字作文当历史，prefill 直接从 6 秒涨到 30 秒。
+        // 生成只有 6 tok/s，多带一轮历史的代价远比"记得更多"值钱。
         val history = mutableListOf<String>()
         var estChars = 0
+        var taken = 0
         for (m in chatMessages.dropLast(1).asReversed()) {   // dropLast(1) 去掉刚加的空 assistant
+            if (taken >= 4) break                              // 最多 2 轮（user+assistant 各 2）
             val body = m.content.value
             if (body.isBlank()) continue
             val role = if (m.role == "user") "user" else "assistant"
-            val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
-            if (estChars + piece.length > 500) break           // 约 500 token，把上下文空间让给长文生成
+            // 单条太长的（比如上一轮那篇作文）截断，别整段塞进去
+            val trimmed = if (body.length > 120) body.take(120) + "…" else body
+            val piece = "<|im_start|>" + role + "\n" + trimmed + "<|im_end|>\n"
+            if (estChars + piece.length > 200) break
             history.add(0, piece)
             estChars += piece.length
+            taken++
         }
         // v6.7：如果用户指定了字数（"写600字""1000字作文"），临时加强约束。
         // 8B 模型没有字数计数器，全靠感觉，实测要求 1000 字只写 700 字就收尾。
@@ -390,12 +401,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val sysPrefix = "<|im_start|>system\n" + sysFixed + "<|im_end|>\n"
 
         // 字数要求 + 时间，作为前缀加到最新那条用户消息上
+        // 续写类请求要单独提示：实测模型会把上一轮的整篇文章重写一遍，
+        // 而不是接着往下写（用户说"再续写100字"，它从头又写了一遍）
+        val isContinue = Regex("续写|接着写|继续写|往下写|补充").containsMatchIn(msg)
         val latestUserHint = buildString {
             append("[现在 ").append(nowForChat).append("] ")
             if (wantLen != null && wantLen >= 100) {
                 val paras = (wantLen / 150).coerceIn(3, 12)
                 append("（请写约").append(wantLen).append("字，分").append(paras)
                 append("个自然段写完，每段约150字，务必写满，不要提前收尾，不要重复）")
+            }
+            if (isContinue) {
+                append("（这是续写请求：只输出新增的那一段，绝对不要重复前面已经写过的内容）")
             }
         }
 
