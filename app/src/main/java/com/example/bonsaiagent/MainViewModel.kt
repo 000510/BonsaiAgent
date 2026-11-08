@@ -377,18 +377,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val nowForChat = java.text.SimpleDateFormat(
             "yyyy年M月d日 EEEE HH:mm", java.util.Locale.CHINA
         ).format(java.util.Date())
-        val sysText = if (wantLen != null && wantLen >= 100) {
-            val paras = (wantLen / 150).coerceIn(3, 12)
-            "你是中文写作助手。用户要求约${wantLen}字，请分${paras}个自然段写完，" +
-            "每段约150字，务必写满${wantLen}字以上，不要提前收尾，不要重复。"
-        } else {
-            "你是手机本地助手，回答简洁准确。"
+        // ★ v10.12：对话页也接上 KV 前缀缓存。
+        //
+        // 之前这里调的是 Llama.generate("", prompt, ...) —— 前缀传空，
+        // 于是每一轮都把 system + 历史 + 问题整段重新 prefill 一遍，
+        // 实测 13 秒才出第一个字（路由页有缓存只要 4 秒）。
+        //
+        // 要缓存生效，system 部分必须**逐字节不变**，所以：
+        //   · 时间戳、字数要求这些每轮都变的东西，全部挪到 user 消息里
+        //   · system 只留一句固定的角色描述
+        val sysFixed = "你是手机本地助手，回答简洁准确。"
+        val sysPrefix = "<|im_start|>system\n" + sysFixed + "<|im_end|>\n"
+
+        // 字数要求 + 时间，作为前缀加到最新那条用户消息上
+        val latestUserHint = buildString {
+            append("[现在 ").append(nowForChat).append("] ")
+            if (wantLen != null && wantLen >= 100) {
+                val paras = (wantLen / 150).coerceIn(3, 12)
+                append("（请写约").append(wantLen).append("字，分").append(paras)
+                append("个自然段写完，每段约150字，务必写满，不要提前收尾，不要重复）")
+            }
         }
-        val sysTextWithTime = sysText + "\n当前时间：" + nowForChat
+
+        // 找出**最后一条**（也就是最新）用户消息，提示要插在它那里
+        var lastUserIdx = -1
+        for (i in history.indices) {
+            if (history[i].startsWith("<|im_start|>user")) lastUserIdx = i
+        }
         val prompt = buildString {
-            append("<|im_start|>system\n")
-            append(sysTextWithTime).append("<|im_end|>\n")
-            for (h in history) append(h)
+            for ((i, h) in history.withIndex()) {
+                if (i == lastUserIdx) {
+                    append("<|im_start|>user\n").append(latestUserHint)
+                    append(h.removePrefix("<|im_start|>user\n"))
+                } else {
+                    append(h)
+                }
+            }
             append("<|im_start|>assistant\n")
             // v6.6：跳过思考阶段。
             // Ternary-Bonsai 是推理模型，会在 <think>...</think> 里先想一大段。
@@ -406,7 +430,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var tokCount = 0
             // 推理要用大栈线程：llama.cpp 的计算在调用线程栈上跑，默认 1MB 容易溢出
             val worker = Thread(null, Runnable {
-                Llama.generate("", prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
+                Llama.generate(sysPrefix, prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
                     buf.append(it)
                     tokCount++
                     // 速度只从"第一个字出来之后"开始算，否则会把 prefill 时间摊进去，显得很慢
