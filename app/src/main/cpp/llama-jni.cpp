@@ -666,6 +666,12 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     auto* st = reinterpret_cast<LlamaState*>(handle);
     if (!st || !st->ctx || !st->model) return env->NewStringUTF("[模型未初始化]");
 
+    // 绑大核：必须在生成线程里绑（这个函数就运行在 llama-gen 线程上）
+    {
+        int want = (int) llama_n_threads(st->ctx);
+        pin_to_fast_cores(want > 0 ? want : 4);
+    }
+
     // 这个函数跑在 Kotlin 侧的 "llama-gen" 线程，必须在本线程装 altstack，
     // 否则该线程上的 SIGSEGV 会因为拿不到备用栈而被内核直接杀进程（v1.13 修复）
     install_altstack_here();

@@ -188,7 +188,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         sb.appendLine("机型: " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL)
         sb.appendLine("系统: Android " + android.os.Build.VERSION.RELEASE + " / SDK " + android.os.Build.VERSION.SDK_INT)
         sb.appendLine("CPU 核数: " + Runtime.getRuntime().availableProcessors())
-        sb.appendLine("App 版本: 6.3")
+        val vn = try {
+            app.packageManager.getPackageInfo(app.packageName, 0).versionName
+        } catch (_: Throwable) { "?" }
+        sb.appendLine("App 版本: $vn")
+        sb.appendLine("设置线程数: ${settings.value.threads}（改了必须重新加载模型才生效）")
         sb.appendLine("模型: " + (modelPath.value ?: "未导入"))
         sb.appendLine()
 
@@ -197,6 +201,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sb.appendLine("--- 崩溃记录 ---")
             sb.appendLine(crash)
         }
+        // 线程/上下文相关的行最关键，单独捞出来，避免被最近 40 行挤掉
+        try {
+            val all = java.io.File(app.filesDir, "run_log.txt")
+            if (all.exists()) {
+                val key = all.readLines().filter {
+                    it.contains("上下文就绪") || it.contains("n_threads") || it.contains("线程")
+                }.takeLast(4)
+                if (key.isNotEmpty()) {
+                    sb.appendLine("--- 关键行 ---")
+                    key.forEach { sb.appendLine(it) }
+                }
+            }
+        } catch (_: Throwable) { }
         val log = readFileTail("run_log.txt", 40)
         if (log.isNotBlank()) {
             sb.appendLine("--- 日志末尾 ---")
