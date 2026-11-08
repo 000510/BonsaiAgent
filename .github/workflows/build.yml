@@ -46,17 +46,21 @@ jobs:
           ls -l ggml/src/ggml-cpu/llamafile/sgemm.cpp
           python3 "$GITHUB_WORKSPACE/tools/patch_sgemm.py" ggml/src/ggml-cpu/llamafile/sgemm.cpp
 
+      - name: 配置 Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.9
+
       - name: 编译 Debug APK
         run: |
-          # 不用 gradle-build-action：它的输出会被折叠，日志 API 拿不到报错内容
-          # （排查 v10.16 失败时被坑了一次，410 行日志里一条 Kotlin 错误都没有）
-          chmod +x ./gradlew || true
+          # 直接用 gradle 命令（仓库里没有 gradlew，之前靠 action 代跑，
+          # 但它的输出被折叠，日志 API 里一条 Kotlin 错误都看不到）
           set +e
-          ./gradlew assembleDebug --no-daemon --stacktrace > build.log 2>&1
+          gradle assembleDebug --no-daemon --stacktrace > build.log 2>&1
           RC=$?
           echo "===== 编译退出码 $RC ====="
           echo "----- 错误行 -----"
-          grep -n "^e: \|error: \|Unresolved" build.log | head -20 || true
+          grep -n "^e: \|error: \|Unresolved" build.log | head -25 || true
           echo "----- 最后 40 行 -----"
           tail -40 build.log || true
           exit $RC
