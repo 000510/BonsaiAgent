@@ -806,7 +806,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     // 和上一轮的序列求最长公共前缀 L，把 KV 截断到 L，只算 L 之后的新增部分。
     // 不拷贝 KV（就地复用），内存零增加；历史越长省得越多。
     set_stage("kv");
-    int n_past_base = 0;
+    n_past_base = 0;
     int kvReuse = 0;
     {
         llama_memory_t mem = llama_get_memory(st->ctx);
@@ -826,8 +826,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             log_line("KV 续接：复用 %zu token，只需再算 %d token（省下 %d）",
                      L, n_tok - (int) L, (int) L);
         }
-        kvReuse = (int) L;
-        n_past_base = 0;   // 前缀已算进 tokens 里，不再单独占位
+        kvReuse = (int) L;   // 前缀已算进 tokens 里，n_past_base 保持 0
     }
 
     // 前缀占了 n_past_base 个位置，前面那次 budget 计算是在"前缀为 0"的前提下做的，
