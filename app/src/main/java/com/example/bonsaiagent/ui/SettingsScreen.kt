@@ -39,6 +39,19 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         OutlinedButton(onClick = { vm.refreshApps() }) {
             Text("刷新应用列表（已识别 ${vm.appCount.value} 个）")
         }
+
+        // v10.20：LiteRT 后端选择（只对 .litertlm 模型有效）
+        Text("LiteRT 后端（仅 .litertlm 模型）", style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("NPU", "GPU", "CPU").forEach { be ->
+                val on = s.litertBackend.equals(be, true)
+                if (on) {
+                    Button(onClick = {}) { Text(be) }
+                } else {
+                    OutlinedButton(onClick = { vm.updateSettings(s.copy(litertBackend = be)) }) { Text(be) }
+                }
+            }
+        }
         // 长按可复制：诊断日志太长，复制粘贴比截图清楚得多
         SelectionContainer {
             Text(
