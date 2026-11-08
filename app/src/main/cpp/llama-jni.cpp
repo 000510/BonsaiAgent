@@ -580,19 +580,10 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = n_gpu_layers;
 
-    // ★ v10.17：关闭 mmap，把权重**真正读进内存**。
-    //
-    // 默认 use_mmap=true 时，权重只是映射成文件视图，每次计算靠页缓存命中。
-    // Android 内存一紧张，页缓存被回收 → 每个 token 都要回 UFS 闪存重读
-    // （UFS 3.1 约 2~3 GB/s，比 LPDDR5X 慢一个数量级）。
-    //
-    // 实测 6.4 tok/s × 2.03 GB ≈ 13 GB/s，正好卡在"UFS 和内存之间"，
-    // 说明一直处于混合状态 —— 一部分命中缓存，一部分在闪存里翻。
-    //
-    // 代价：加载时多等十几秒（2GB 从闪存读入），内存多占 2GB。
-    // 收益：每个 token 都从 LPDDR5X 读，不再受闪存拖累。
-    mparams.use_mmap  = false;
-    mparams.use_mlock = false;   // Android 上没有 mlock 权限，设了也没用
+    // v10.19：mmap 相关字段已从这个版本的 llama_model_params 里移除
+    // （编译报错 "no member named 'use_mmap'"）。
+    // 也就是说 v10.17 那次"关 mmap"的改动不但无效，连字段都不存在了。
+    // 新版 llama.cpp 内部自己管理权重的加载方式，外部无法切换。
 
     llama_model* model = llama_model_load_from_file(spath.c_str(), mparams);
     if (!model) {
