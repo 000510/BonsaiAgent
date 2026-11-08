@@ -50,6 +50,16 @@ class ChatMessage(val role: String) {
     // 表现和 native 崩溃一模一样：瞬间闪退、没有 tombstone、日志停在半路。
     val id: Long = ++chatMsgSeq
     val content = mutableStateOf("")
+
+    /**
+     * v10.16：真正送进 prompt 的文本（可能带「[现在 …]」「字数要求」前缀）。
+     *
+     * 为什么单独存一份：KV 续接要求历史**逐字节不变**。
+     * 之前这个前缀是临时拼的、没存下来，下一轮重建 prompt 时消息变回纯文本，
+     * 两条 token 序列从第一个字就分叉 —— 实测 263 token 的 prompt 只复用了 17 个。
+     * 界面上只显示 content，prompt 里用 promptText + content。
+     */
+    var promptText: String = ""
 }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -375,40 +385,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         //
         // 唯一要求：历史必须保持"只追加"。所以这里不做任何截断/改写，
         // 只保留一个很大的硬上限防止撞爆上下文（约 2400 字符）。
-        val history = mutableListOf<String>()
-        var estChars = 0
-        for (m in chatMessages.dropLast(1).asReversed()) {   // dropLast(1) 去掉刚加的空 assistant
-            val body = m.content.value
-            if (body.isBlank()) continue
-            val role = if (m.role == "user") "user" else "assistant"
-            val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
-            if (estChars + piece.length > 2400) break
-            history.add(0, piece)
-            estChars += piece.length
-        }
-        // v6.7：如果用户指定了字数（"写600字""1000字作文"），临时加强约束。
-        // 8B 模型没有字数计数器，全靠感觉，实测要求 1000 字只写 700 字就收尾。
-        // 这里把要求提到 system 里，并给出"分段"这种可执行的结构，
-        // 比单纯重复"1000字"有效得多。只对本次请求生效，不影响普通聊天。
+        // v6.7：用户指定字数时加强约束（8B 没有字数计数器，全靠感觉）
         val wantLen = Regex("""(\d{2,5})\s*字""").find(msg)?.groupValues?.get(1)?.toIntOrNull()
         val nowForChat = java.text.SimpleDateFormat(
             "yyyy年M月d日 EEEE HH:mm", java.util.Locale.CHINA
         ).format(java.util.Date())
-        // ★ v10.12：对话页也接上 KV 前缀缓存。
-        //
-        // 之前这里调的是 Llama.generate("", prompt, ...) —— 前缀传空，
-        // 于是每一轮都把 system + 历史 + 问题整段重新 prefill 一遍，
-        // 实测 13 秒才出第一个字（路由页有缓存只要 4 秒）。
-        //
-        // 要缓存生效，system 部分必须**逐字节不变**，所以：
-        //   · 时间戳、字数要求这些每轮都变的东西，全部挪到 user 消息里
-        //   · system 只留一句固定的角色描述
+
+        // system 必须逐字节固定，KV 前缀才复用得上
         val sysFixed = "你是手机本地助手，回答简洁准确。"
         val sysPrefix = "<|im_start|>system\n" + sysFixed + "<|im_end|>\n"
 
-        // 字数要求 + 时间，作为前缀加到最新那条用户消息上
-        // 续写类请求要单独提示：实测模型会把上一轮的整篇文章重写一遍，
-        // 而不是接着往下写（用户说"再续写100字"，它从头又写了一遍）
         val isContinue = Regex("续写|接着写|继续写|往下写|补充").containsMatchIn(msg)
         val latestUserHint = buildString {
             append("[现在 ").append(nowForChat).append("] ")
@@ -422,20 +408,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // 找出**最后一条**（也就是最新）用户消息，提示要插在它那里
-        var lastUserIdx = -1
-        for (i in history.indices) {
-            if (history[i].startsWith("<|im_start|>user")) lastUserIdx = i
+        // ★ 关键：把这段前缀记进消息本身，之后作为历史原样复用 ——
+        // 下一轮重建 prompt 时，同一条历史消息 tokenize 出来才会完全一致。
+        chatMessages.lastOrNull { it.role == "user" && it.promptText.isEmpty() }
+            ?.let { it.promptText = latestUserHint }
+
+        val history = mutableListOf<String>()
+        var estChars = 0
+        for (m in chatMessages.dropLast(1).asReversed()) {   // dropLast(1) 去掉刚加的空 assistant
+            val raw = m.content.value
+            if (raw.isBlank()) continue
+            val role = if (m.role == "user") "user" else "assistant"
+            val body = if (m.promptText.isNotEmpty()) m.promptText + raw else raw
+            val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
+            if (estChars + piece.length > 2400) break
+            history.add(0, piece)
+            estChars += piece.length
         }
+
         val prompt = buildString {
-            for ((i, h) in history.withIndex()) {
-                if (i == lastUserIdx) {
-                    append("<|im_start|>user\n").append(latestUserHint)
-                    append(h.removePrefix("<|im_start|>user\n"))
-                } else {
-                    append(h)
-                }
-            }
+            for (h in history) append(h)
             append("<|im_start|>assistant\n")
             // v6.6：跳过思考阶段。
             // Ternary-Bonsai 是推理模型，会在 <think>...</think> 里先想一大段。
