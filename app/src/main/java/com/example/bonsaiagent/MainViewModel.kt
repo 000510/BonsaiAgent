@@ -321,7 +321,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // 光这一项就是数倍差距（真凶已查明是 UI 的 item key，与线程无关）。
             // 取 CPU 核数，但上限 4。手机多是"4 大核 + 4 小核"，
             // 线程开到 6~8 会把任务调度到小核上，反而更慢，还更容易降频。
-            val cores = Runtime.getRuntime().availableProcessors().coerceIn(1, 6)
+            // ★ v10.11 关键修复：这里原来写的是
+            //     Runtime.getRuntime().availableProcessors().coerceIn(1, 6)
+            // 也就是说**根本不读用户设置**，8 核手机永远被压成 6 线程。
+            // 设置页那个线程滑块整整几版都是摆设 ——
+            // 用户测 1/4/8 完全一样，日志永远 6，全是因为这一行。
+            val cores = settings.value.threads.coerceIn(1, 16)
             // 动态后端需要知道 .so 目录（ggml 会在这里找 libggml-cpu-android_armvX_*.so）
             val nativeDir = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
             val ok = Llama.load(path, cores, settings.value.contextSize, nativeDir)
@@ -412,10 +417,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
                     val snap = GenStatus(if (thinking) "思考中" else "生成中", speed, tokCount, show.length)
                     mainHandler.post {
-                        // v10.4：路由页不实时显示模型原文。
-                        // 模型（尤其 1.5B）会把提示词、用户的话复读一遍，
-                        // 那堆东西对用户毫无意义 —— 这里只更新状态条，
-                        // 真正的结果等解析完（动作/云端/回答）再一次性给出。
+                        // ★ v10.11：对话页必须实时显示内容。
+                        // v10.4 那次改动本意只针对路由页（那里模型会复读提示词），
+                        // 但批量替换把对话页这一处也改了 ——
+                        // 结果对话页生成时界面一片空白，表现就是"吞回答"。
+                        ai.content.value = show
                         genStatus.value = snap
                     }
                 }
@@ -430,6 +436,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 delay(120)
             }
             worker.join()
+            // 兜底：万一流式回调一个字都没写进去（比如首字就被裁掉），
+            // 这里用完整缓冲再落一次，保证界面上不会只剩一个省略号
+            if (ai.content.value.isBlank()) {
+                mainHandler.post { ai.content.value = extractAnswer(buf.toString()).first }
+            }
             val st = genStatus.value
             mainHandler.post { genStatus.value = st.copy(phase = "完成") }
         }
