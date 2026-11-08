@@ -23,7 +23,10 @@ data class AgentSettings(
     val apiBase: String = "https://api.deepseek.com",
     // v7.0：危险命令开关。默认关闭 —— 本地模型可能被诱导出破坏性命令，
     // 必须由用户明确打开才允许执行 rm -rf / pm uninstall / su 这类操作。
-    val allowDangerous: Boolean = false
+    val allowDangerous: Boolean = false,
+
+    // v10.20：LiteRT 后端（NPU / GPU / CPU）。只在加载 .litertlm 模型时生效。
+    val litertBackend: String = "NPU"
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述。
@@ -86,6 +89,7 @@ class SettingsStore(context: Context) {
         threads = sp.getInt("threads", 4),
         systemPrompt = sp.getString("systemPrompt", DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT,
         downloadSource = sp.getString("downloadSource", "HF镜像") ?: "HF镜像",
+        litertBackend = sp.getString("litertBackend", "NPU") ?: "NPU",
         apiEnabled = sp.getBoolean("apiEnabled", false),
         deepseekKey = sp.getString("deepseekKey", "") ?: "",
         apiBase = sp.getString("apiBase", "https://api.deepseek.com") ?: "https://api.deepseek.com",
@@ -101,6 +105,7 @@ class SettingsStore(context: Context) {
             putFloat("repeatPenalty", s.repeatPenalty)
             putInt("contextSize", s.contextSize)
             putInt("threads", s.threads)
+            putString("litertBackend", s.litertBackend)
             putString("systemPrompt", s.systemPrompt)
             putString("downloadSource", s.downloadSource)
             putBoolean("apiEnabled", s.apiEnabled)

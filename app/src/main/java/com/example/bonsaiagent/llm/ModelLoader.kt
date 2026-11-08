@@ -31,7 +31,7 @@ object ModelLoader {
     fun currentModelPath(context: Context): String? {
         val dir = File(context.filesDir, "models")
         if (!dir.exists()) return null
-        return dir.listFiles { f -> f.extension.equals("gguf", true) }
+        return dir.listFiles { f -> (f.extension.equals("gguf", true) || f.extension.equals("litertlm", true)) }
             ?.maxByOrNull { it.lastModified() }
             ?.absolutePath
     }

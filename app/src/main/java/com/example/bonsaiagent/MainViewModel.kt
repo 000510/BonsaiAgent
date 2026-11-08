@@ -19,6 +19,7 @@ import com.example.bonsaiagent.api.LocalApiServer
 import com.example.bonsaiagent.data.AgentSettings
 import com.example.bonsaiagent.data.SettingsStore
 import com.example.bonsaiagent.llm.GgufTypeFixer
+import com.example.bonsaiagent.llm.LiteRtEngine
 import com.example.bonsaiagent.llm.Llama
 import com.example.bonsaiagent.llm.ModelLoader
 import kotlinx.coroutines.Dispatchers
@@ -80,6 +81,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val agentMessages = mutableStateListOf<ChatMessage>()
     /** 已索引的桌面应用数量（设置页显示，0 表示还没扫到——多半是 <queries> 没生效） */
     val appCount = mutableStateOf(0)
+    /** LiteRT 的 Conversation 是否已建立（它自己管历史，不用每轮重建） */
+    private var conversationReady = false
 
     init {
         // v10.0：后台扫一遍手机里装了哪些应用，给「打开微信」这类指令用。
@@ -318,6 +321,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val path = modelPath.value ?: run {
             status.value = "没有可用的模型文件"; return
         }
+
+        // v10.20：.litertlm 走 LiteRT-LM（唯一能用到天玑 NPU 的路），.gguf 走 llama.cpp。
+        if (path.endsWith(".litertlm", ignoreCase = true)) {
+            genStatus.value = GenStatus(phase = "加载中")
+            viewModelScope.launch(Dispatchers.IO) {
+                val app = getApplication<android.app.Application>()
+                val be = settings.value.litertBackend
+                withContext(Dispatchers.Main) { status.value = "正在加载 LiteRT 模型（后端 $be）…" }
+                conversationReady = false
+                val ok = LiteRtEngine.load(app, path, be, settings.value.threads)
+                withContext(Dispatchers.Main) {
+                    modelLoaded.value = ok
+                    genStatus.value = GenStatus(phase = "就绪")
+                    status.value = if (ok) {
+                        "LiteRT 就绪 ✅（后端 ${LiteRtEngine.currentBackend()}）"
+                    } else {
+                        "LiteRT 加载失败：${LiteRtEngine.lastError}\n" +
+                            "NPU 不行就把设置里的后端改成 CPU 再试"
+                    }
+                }
+            }
+            return
+        }
+
         genStatus.value = GenStatus(phase = "加载中")
         viewModelScope.launch(Dispatchers.IO) {
             status.value = "正在加载模型…"
@@ -357,9 +384,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 页面1：纯本地对话 */
     fun sendChat(text: String) {
-        if (!Llama.isLoaded()) { status.value = "请先在设置页导入并加载模型"; return }
+        if (!Llama.isLoaded() && !LiteRtEngine.isLoaded()) {
+            status.value = "请先在设置页导入并加载模型"; return
+        }
         val msg = text.trim()
         if (msg.isBlank()) return
+        // v10.20：LiteRT 走独立分支（它自己管历史，不拼 ChatML）
+        if (LiteRtEngine.isLoaded()) { sendChatLiteRt(msg); return }
         val user = ChatMessage("user").apply { content.value = msg }
         val ai = ChatMessage("assistant")
         chatMessages.add(user); chatMessages.add(ai)
@@ -482,6 +513,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             val st = genStatus.value
             mainHandler.post { genStatus.value = st.copy(phase = "完成") }
+        }
+    }
+
+    /**
+     * LiteRT 版对话（v10.20）
+     *
+     * 和 llama.cpp 那条路的区别：历史由 Conversation 自己管，
+     * 不用每轮重建 ChatML，也不用担心 KV 续接 —— 那是 llama.cpp 的麻烦。
+     */
+    private fun sendChatLiteRt(msg: String) {
+        val st = settings.value
+        val user = ChatMessage("user").apply { content.value = msg }
+        val ai = ChatMessage("assistant")
+        chatMessages.add(user); chatMessages.add(ai)
+
+        genStatus.value = GenStatus(phase = "处理输入")
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!conversationReady) {
+                LiteRtEngine.newConversation(
+                    "你是手机本地助手，回答简洁准确。",
+                    st.temperature.toDouble(), st.topK, st.topP.toDouble()
+                )
+                conversationReady = true
+            }
+            val t0 = System.currentTimeMillis()
+            var firstAt = 0L
+            var n = 0
+            val out = LiteRtEngine.generate(msg, 300) { piece ->
+                n++
+                if (firstAt == 0L) firstAt = System.currentTimeMillis()
+                val sec = (System.currentTimeMillis() - firstAt) / 1000.0
+                val sp = if (sec > 0.05) (n / sec).toFloat() else 0f
+                mainHandler.post {
+                    ai.content.value = ai.content.value + piece
+                    genStatus.value = GenStatus("生成中", sp, n, ai.content.value.length)
+                }
+            }
+            val el = ((System.currentTimeMillis() - t0) / 1000.0).coerceAtLeast(0.1)
+            mainHandler.post {
+                if (out.isBlank()) {
+                    ai.content.value = "（没拿到输出）" + LiteRtEngine.lastError
+                }
+                genStatus.value = GenStatus("完成", (n / el).toFloat(), n, ai.content.value.length, el)
+            }
         }
     }
 
