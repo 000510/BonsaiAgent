@@ -617,8 +617,13 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     // 为什么值得试：prefill 是批量矩阵乘，ubatch 越大算力利用率越高。
     // 实测 prefill 只有 8 tok/s，远低于 CPU 该有的水平（正常应 20~40），
     // 说明批量太小、算力没喂饱。
-    cparams.n_batch         = 256;
-    cparams.n_ubatch        = 128;
+    // v10.18：ubatch 128 → 512。
+    // 实测对照：llama.cpp 里 pp1024 从 ubatch=128 到 512 能提升约 74%。
+    // 我们的 prefill 只有 8 tok/s（正常该是 decode 的 4~5 倍），说明批量没吃满。
+    // 前提是模型有 GEMM 路径 —— Q4_K_M 有（repack + i8mm），三值 Q2_0 没有。
+    // 所以这个改动对 Qwen3-4B 有收益，对老的 8B 三值没有。
+    cparams.n_batch         = 512;
+    cparams.n_ubatch        = 512;
 
     // v6.5 关键修复：KV cache 改用 FP32。
     // 崩溃现场：
