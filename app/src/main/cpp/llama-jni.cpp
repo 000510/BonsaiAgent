@@ -86,76 +86,6 @@ static long mem_available_mb() {
     return kb < 0 ? -1 : kb / 1024;
 }
 
-// ── 绑核：把线程钉到 X4 大核上 ─────────────────────────────────────────
-// 天玑 9300+ 是 4×Cortex-X4(3.4/2.85GHz) + 4×Cortex-A720(2.0GHz)，4+4 架构。
-// 取"频率 ≥ 最高频 80%"的核，正好挑出 4 个 X4、把 A720 排除。
-//
-// 为什么必须遍历 /proc/self/task：真正干活的是 llama.cpp 线程池里的 worker，
-// 它们由库内部创建。只绑调用线程（sched_setaffinity(0,...)）对它们毫无作用，
-// 实测绑完速度完全不变，就是这个原因。
-
-static void build_fast_mask(int want, cpu_set_t* set, int* picked_out, long* top_out) {
-    CPU_ZERO(set);
-    if (picked_out) *picked_out = 0;
-    if (top_out) *top_out = 0;
-    if (want <= 0) return;
-
-    long freq[64];
-    int n = 0;
-    for (int i = 0; i < 64; i++) {
-        char path[128];
-        snprintf(path, sizeof(path),
-                 "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
-        FILE* f = fopen(path, "r");
-        if (!f) break;
-        long v = 0;
-        if (fscanf(f, "%ld", &v) != 1) v = 0;
-        fclose(f);
-        freq[n++] = v;
-    }
-    if (n <= 0) return;
-
-    long top = 0;
-    for (int i = 0; i < n; i++) if (freq[i] > top) top = freq[i];
-    if (top <= 0) return;
-    if (top_out) *top_out = top;
-
-    int picked = 0;
-    for (int i = 0; i < n && picked < want; i++) {
-        if (freq[i] * 100 >= top * 80) { CPU_SET(i, set); picked++; }
-    }
-    if (picked_out) *picked_out = picked;
-}
-
-static void pin_all_threads(int want, const char* tag) {
-    if (want <= 0) return;
-    cpu_set_t set;
-    int picked = 0;
-    long top = 0;
-    build_fast_mask(want, &set, &picked, &top);
-    if (picked == 0) { log_line("[绑核 %s] 读不到 CPU 频率，跳过", tag); return; }
-
-    int done = 0;
-    DIR* d = opendir("/proc/self/task");
-    if (!d) return;
-    struct dirent* e;
-    while ((e = readdir(d)) != nullptr) {
-        if (e->d_name[0] == '.') continue;
-        int tid = atoi(e->d_name);
-        if (tid <= 0) continue;
-        if (sched_setaffinity(tid, sizeof(set), &set) == 0) done++;
-    }
-    closedir(d);
-
-    char mask[128]; mask[0] = 0;
-    for (int i = 0; i < 16; i++) if (CPU_ISSET(i, &set)) {
-        char t[16]; snprintf(t, sizeof(t), "%d,", i);
-        strncat(mask, t, sizeof(mask) - strlen(mask) - 1);
-    }
-    log_line("[绑核 %s] 目标 CPU{%s} 共 %d 核（最高 %ld kHz），成功绑定 %d 个线程",
-             tag, mask, picked, top, done);
-}
-
 static void set_stage(const char* s) {
     snprintf(g_stage, sizeof(g_stage), "%s", s);
     // 提前格式化，信号处理里只做 write，避免崩溃时死在 snprintf
@@ -740,9 +670,9 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     if (!st || !st->ctx || !st->model) return env->NewStringUTF("[模型未初始化]");
 
     // 绑大核：必须在生成线程里绑（这个函数就运行在 llama-gen 线程上）
-    // 绑大核：线程池可能还没建好，这里先绑一次，decode 前再绑一次
-    const int pin_want = llama_n_threads(st->ctx) > 0 ? (int) llama_n_threads(st->ctx) : 4;
-    pin_all_threads(pin_want, "开始");
+    // v10.10：绑核已移除 —— 实测把全部线程钉到 4 个大核反而更慢，
+    // 46 个线程（计算 + UI + GC + 渲染）全挤在 4 个核上互相抢，
+    // 生成从 4.48 掉到 1.74 tok/s。负优化，撤掉。
 
     // 这个函数跑在 Kotlin 侧的 "llama-gen" 线程，必须在本线程装 altstack，
     // 否则该线程上的 SIGSEGV 会因为拿不到备用栈而被内核直接杀进程（v1.13 修复）
@@ -973,8 +903,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
                  n_tok, n_chunk, csec, csec > 0 ? n_tok / csec : 0.0);
     }
     log_line("prefill 结束后可用内存 %ld MB", mem_available_mb());
-    // prefill 跑完，llama.cpp 的线程池已经建好，这时候再绑一次才覆盖得到 worker
-    pin_all_threads(pin_want, "prefill后");
+
 
     // v3.4 诊断：prefill 之后 logits 到底有没有算出来。
     // 如果这里是 NULL，说明根本没产出下一个 token 的概率分布 —— 后面采样出什么都是垃圾。

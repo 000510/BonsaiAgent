@@ -581,8 +581,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateSettings(s: AgentSettings) {
+        // 线程数只在创建 context 时生效，改了不重新加载等于没改
+        // （实测用户设 1 线程，日志里仍是 6，白测一轮）
+        val oldThreads = settings.value.threads
         settings.value = s
         store.save(s)
+        if (s.threads != oldThreads && modelLoaded.value) {
+            status.value = "线程数已改为 ${s.threads} —— 必须点「加载模型」才生效（当前跑的还是旧值）"
+        }
         if (s.apiEnabled && apiServer == null) {
             apiServer = LocalApiServer {
                 Triple(settings.value.temperature, settings.value.topK, settings.value.topP)
