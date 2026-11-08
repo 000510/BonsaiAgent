@@ -59,7 +59,14 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = '17' }
+    kotlinOptions {
+        jvmTarget = '17'
+        // v10.20：litertlm-android 是用 Kotlin 2.4 编译的，metadata 版本 2.4.0，
+        // 而本项目的 Kotlin 是 1.9.24（只能读 ≤2.0）。
+        // 这里跳过版本检查先试一把 —— 如果 API 签名实际兼容，就能省掉整条工具链升级；
+        // 如果运行时崩（NoSuchMethodError / ClassCastException），就只能升级 Kotlin。
+        freeCompilerArgs += ['-Xskip-metadata-version-check']
+    }
 
     externalNativeBuild {
         cmake {
