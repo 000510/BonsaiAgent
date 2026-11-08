@@ -858,8 +858,21 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         auto tc0 = std::chrono::steady_clock::now();
         while (done < n_tok) {
             int chunk = (int) std::min<int64_t>(n_tok - done, n_batch_max);
-            llama_batch cb = llama_batch_get_one(tokens.data() + done, chunk);
+            // v10.14：显式设置 pos。
+            // llama_batch_get_one 不带位置，靠 context 内部 n_past 推断；
+            // 而我们在上面刚截断过 KV，一旦推断错就会从 0 覆盖开头，输出全乱。
+            // 这里逐个 token 写明 pos = done + i，绝对可靠。
+            llama_batch cb = llama_batch_init(chunk, 0, 1);
+            for (int k = 0; k < chunk; k++) {
+                cb.token[k]    = tokens[(size_t)(done + k)];
+                cb.pos[k]      = (llama_pos)(done + k);
+                cb.n_seq_id[k] = 1;
+                cb.seq_id[k][0] = 0;
+                cb.logits[k]   = ((done + k) == n_tok - 1) ? 1 : 0;
+            }
+            cb.n_tokens = chunk;
             int rc = llama_decode(st->ctx, cb);
+            llama_batch_free(cb);
             n_chunk++;
             if (rc != 0) {
                 llama_sampler_free(smpl);

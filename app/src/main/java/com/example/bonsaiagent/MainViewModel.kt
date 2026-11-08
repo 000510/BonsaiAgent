@@ -206,8 +206,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val all = java.io.File(app.filesDir, "run_log.txt")
             if (all.exists()) {
                 val key = all.readLines().filter {
-                    it.contains("上下文就绪") || it.contains("n_threads") || it.contains("线程")
-                }.takeLast(4)
+                    it.contains("上下文就绪") || it.contains("n_threads") || it.contains("线程") ||
+                    it.contains("KV") || it.contains("续接") || it.contains("前缀") ||
+                    it.contains("prefill") || it.contains("prompt ")
+                }.takeLast(14)   // v10.15：KV 续接/前缀复用是核心指标，必须能看到
                 if (key.isNotEmpty()) {
                     sb.appendLine("--- 关键行 ---")
                     key.forEach { sb.appendLine(it) }
