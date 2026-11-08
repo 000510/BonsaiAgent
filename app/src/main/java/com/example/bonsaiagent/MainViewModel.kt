@@ -87,6 +87,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     init {
         // v10.0：后台扫一遍手机里装了哪些应用，给「打开微信」这类指令用。
         // 有缓存就直接读缓存（毫秒级），没缓存才真的去问系统。
+        refreshModels()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val n = AppIndex.all(getApplication()).size
@@ -302,16 +303,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 从系统选择器导入 .gguf 并加载 */
+    /** v10.22：私有目录里的模型列表（用于管理/删除） */
+    val modelFiles = mutableStateListOf<java.io.File>()
+
+    fun refreshModels() {
+        modelFiles.clear()
+        modelFiles.addAll(ModelLoader.listModels(getApplication()))
+    }
+
+    fun deleteModelFile(f: java.io.File) {
+        val wasCurrent = modelPath.value == f.absolutePath
+        val ok = ModelLoader.deleteModel(f)
+        if (ok && wasCurrent) {
+            modelPath.value = ModelLoader.currentModelPath(getApplication())
+            try { Llama.unload() } catch (_: Throwable) {}
+            try { LiteRtEngine.unload() } catch (_: Throwable) {}
+            modelLoaded.value = false
+        }
+        refreshModels()
+        status.value = if (ok) "已删除 ${f.name}" else "删除失败：${f.name}"
+    }
+
     fun importModel(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             val p = ModelLoader.importFromUri(getApplication(), uri)
             withContext(Dispatchers.Main) {
+                refreshModels()
                 if (p != null) {
                     modelPath.value = p
                     status.value = "模型已导入，正在加载…"
                     loadModel()
                 } else {
-                    status.value = "导入失败"
+                    // v10.22：把真实原因说出来 —— 之前只说"导入失败"，
+                    // 复制中断（2.33GB 只进去 0.15GB）也吃得下这个提示，白折腾一轮
+                    status.value = "导入失败：${ModelLoader.lastError}"
                 }
             }
         }
@@ -335,10 +360,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     modelLoaded.value = ok
                     genStatus.value = GenStatus(phase = "就绪")
                     status.value = if (ok) {
-                        "LiteRT 就绪 ✅（后端 ${LiteRtEngine.currentBackend()}）"
+                        "LiteRT 就绪 ✅（后端 ${LiteRtEngine.currentBackend()}）\n" +
+                            "注意：如果生成很慢或直接崩，说明 NPU 没真正生效（回退到了 CPU）"
                     } else {
-                        "LiteRT 加载失败：${LiteRtEngine.lastError}\n" +
-                            "NPU 不行就把设置里的后端改成 CPU 再试"
+                        "LiteRT 加载失败：${LiteRtEngine.lastError}\n\n" +
+                            "天玑的 NPU 需要联发科 NeuroPilot SDK（要注册开发者申请），\n" +
+                            "第三方 App 通常拿不到，日志里会报 No dispatch library found。\n" +
+                            "这条路走不通的话，回到 .gguf + llama.cpp 即可（11 tok/s）。"
                     }
                 }
             }

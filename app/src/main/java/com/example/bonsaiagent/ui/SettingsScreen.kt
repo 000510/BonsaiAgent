@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.bonsaiagent.MainViewModel
+import com.example.bonsaiagent.llm.ModelLoader
 import com.example.bonsaiagent.data.AgentSettings
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,6 +40,33 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         OutlinedButton(onClick = { vm.refreshApps() }) {
             Text("刷新应用列表（已识别 ${vm.appCount.value} 个）")
         }
+
+        // v10.22：模型管理 —— 私有目录里的模型会一直堆着不删，
+        // 实测堆到 11.83 GB（三值模型好几份 + 各家 gguf），把手机撑爆。
+        Divider(Modifier.padding(vertical = 4.dp))
+        Text("已导入模型（${vm.modelFiles.size}）", style = MaterialTheme.typography.titleSmall)
+        vm.modelFiles.forEach { f ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(f.name, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        ModelLoader.sizeText(f.length()),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = { vm.deleteModelFile(f) }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+        if (vm.modelFiles.isEmpty()) {
+            Text("（还没有导入任何模型）", style = MaterialTheme.typography.bodySmall)
+        }
+        Divider(Modifier.padding(vertical = 4.dp))
 
         // v10.20：LiteRT 后端选择（只对 .litertlm 模型有效）
         Text("LiteRT 后端（仅 .litertlm 模型）", style = MaterialTheme.typography.bodySmall)
