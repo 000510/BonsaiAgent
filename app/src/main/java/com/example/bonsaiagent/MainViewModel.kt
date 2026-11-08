@@ -364,21 +364,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 历史每轮都变，没法缓存 —— 全部要重新 prefill。
         // 实测第二轮带上一轮的 200 字作文当历史，prefill 直接从 6 秒涨到 30 秒。
         // 生成只有 6 tok/s，多带一轮历史的代价远比"记得更多"值钱。
+        // v10.14：历史恢复完整，不再砍。
+        //
+        // 上一版为了压 prefill 把历史砍到 2 轮共 200 字符，但那样做多轮 Agent 操作会失忆。
+        // 现在改动方式变了 —— native 层做「整段序列续接」：
+        // 只要 prompt 是上一轮的**追加**（历史只增不改），
+        // 前面算过的 KV 全部复用，prefill 只算新增的十几个 token。
+        //
+        // 唯一要求：历史必须保持"只追加"。所以这里不做任何截断/改写，
+        // 只保留一个很大的硬上限防止撞爆上下文（约 2400 字符）。
         val history = mutableListOf<String>()
         var estChars = 0
-        var taken = 0
         for (m in chatMessages.dropLast(1).asReversed()) {   // dropLast(1) 去掉刚加的空 assistant
-            if (taken >= 4) break                              // 最多 2 轮（user+assistant 各 2）
             val body = m.content.value
             if (body.isBlank()) continue
             val role = if (m.role == "user") "user" else "assistant"
-            // 单条太长的（比如上一轮那篇作文）截断，别整段塞进去
-            val trimmed = if (body.length > 120) body.take(120) + "…" else body
-            val piece = "<|im_start|>" + role + "\n" + trimmed + "<|im_end|>\n"
-            if (estChars + piece.length > 200) break
+            val piece = "<|im_start|>" + role + "\n" + body + "<|im_end|>\n"
+            if (estChars + piece.length > 2400) break
             history.add(0, piece)
             estChars += piece.length
-            taken++
         }
         // v6.7：如果用户指定了字数（"写600字""1000字作文"），临时加强约束。
         // 8B 模型没有字数计数器，全靠感觉，实测要求 1000 字只写 700 字就收尾。

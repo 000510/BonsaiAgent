@@ -385,9 +385,15 @@ struct LlamaState {
     // v8.0 KV 前缀缓存（"汤底复用"）：
     // system prompt 每轮完全相同，却要每轮重新 prefill —— 实测占单轮 15 秒里的 14 秒。
     // 这里把它的 KV 状态算一次存下来，之后每轮直接恢复，只需处理用户那一小段。
-    std::string          sysText;    // 上次缓存的 system 前缀原文
-    std::vector<uint8_t> sysKv;      // 对应的 KV 快照
+    std::string          sysText;    // 旧方案遗留，不再使用
+    std::vector<uint8_t> sysKv;      // 旧方案遗留，不再使用
     int                  sysTokLen = 0;
+
+    // v10.14 整段序列续接：记住上一轮的完整 token 序列，
+    // 下轮求最长公共前缀，KV 截断到该点后只算新增部分。
+    // 不拷贝任何 KV —— 内存零增加。
+    std::vector<llama_token> lastSeq;
+    int                      lastNPast = 0;
 };
 
 static JavaVM*   g_vm       = nullptr;
@@ -609,8 +615,13 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     // 这正是为什么总在生成到 40~50 个 token 时崩：短问答碰不到，长回答必中。
     // 改成 FP32 后精度足够，代价是 KV cache 内存翻倍（2048 上下文约多 35MB），
     // 相比 5GB 可用内存完全无感。
-    cparams.type_k          = GGML_TYPE_F32;
-    cparams.type_v          = GGML_TYPE_F32;
+    // v10.14：KV cache 从 FP32 改成 Q8_0。
+    // FP32 是被逼的 —— 当年 FP16 会因为浮点溢出成 Inf/NaN 触发 vec_dot 断言崩溃。
+    // Q8_0 是整数+缩放，压根没有这个失效模式，内存还省一半（880MB → 440MB），
+    // 上下文长的时候读得少、生成也快一点。
+    // 万一出问题，把这两行换回 GGML_TYPE_F32 即可。
+    cparams.type_k          = GGML_TYPE_Q8_0;
+    cparams.type_v          = GGML_TYPE_Q8_0;
     cparams.n_threads       = (uint32_t) (n_threads > 0 ? n_threads : 4);
     cparams.n_threads_batch = cparams.n_threads;
     // 主线版本该字段名/枚举可能不同，用默认值（AUTO）即可
@@ -718,13 +729,16 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     }
     const int n_vocab = llama_vocab_n_tokens(vocab);
 
-    int need = llama_tokenize(vocab, prompt.c_str(), (int) prompt.size(),
+    // v10.14：把 sysPrefix 和 prompt 拼成一个完整序列统一 tokenize ——
+    // 续接判断必须是"完整序列的公共前缀"，拆开处理对不上位置。
+    std::string fullPrompt = sysPrefix + prompt;
+    int need = llama_tokenize(vocab, fullPrompt.c_str(), (int) fullPrompt.size(),
                               nullptr, 0, true, true);
     if (need == 0) return env->NewStringUTF("");
     if (need < 0) need = -need;
 
     std::vector<llama_token> tokens((size_t) need + 8);
-    int n_tok = llama_tokenize(vocab, prompt.c_str(), (int) prompt.size(),
+    int n_tok = llama_tokenize(vocab, fullPrompt.c_str(), (int) fullPrompt.size(),
                                tokens.data(), (int) tokens.size(), true, true);
     if (n_tok <= 0) {
         g_lastError = "tokenize 返回 " + std::to_string(n_tok);
@@ -782,79 +796,38 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         llama_sampler_chain_add(smpl, llama_sampler_init_dist(seed));
     }
 
-    // ---- v8.0：KV 前缀缓存（"汤底复用"）----
+    // ---- v10.14：整段序列续接 ----
     //
-    // 背景：system prompt 每轮完全相同，实测占单轮 15 秒里的 14 秒。
-    // 既然算过一次，就把它的 KV 状态存下来，之后直接恢复，
-    // 只处理用户那一小段 —— 这是唯一能让 8B 在手机上"秒回"的办法。
+    // 旧方案（v8.0）只缓存 sysPrefix 的 KV 快照，而且要拷一份（几百 MB）。
+    // 但实测真正贵的是**历史**：第二轮把上一轮的问答整个重新 prefill，
+    // prefill 从 8 秒涨到 15 秒，聊十轮就直接撞上下文上限。
     //
-    // 两种模式：
-    //   sysPrefix 非空 → 缓存模式（Agent 页用）：前缀算一次，之后恢复
-    //   sysPrefix 为空 → 旧行为（对话页用）：整段 prompt 一起 prefill
+    // 新方案：把 sysPrefix + prompt 当成一个完整序列，
+    // 和上一轮的序列求最长公共前缀 L，把 KV 截断到 L，只算 L 之后的新增部分。
+    // 不拷贝 KV（就地复用），内存零增加；历史越长省得越多。
     set_stage("kv");
-    const bool useCache = !sysPrefix.empty();
+    int n_past_base = 0;
+    int kvReuse = 0;
     {
         llama_memory_t mem = llama_get_memory(st->ctx);
-        if (!useCache) {
-            if (mem) llama_memory_clear(mem, true);
-            log_line("已清空 KV cache（整段 prompt 一起处理）");
-        } else if (st->sysKv.empty() || st->sysText != sysPrefix) {
-            // 首次或前缀变了：算一遍并存快照
-            if (mem) llama_memory_clear(mem, true);
 
-            int needP = llama_tokenize(vocab, sysPrefix.c_str(), (int) sysPrefix.size(),
-                                       nullptr, 0, true, true);
-            if (needP < 0) needP = -needP;
-            std::vector<llama_token> pre((size_t) needP + 8);
-            int nPre = llama_tokenize(vocab, sysPrefix.c_str(), (int) sysPrefix.size(),
-                                      pre.data(), (int) pre.size(), true, true);
-            if (nPre <= 0) {
-                log_line("!! system 前缀 tokenize 失败 %d", nPre);
-            } else {
-                pre.resize((size_t) nPre);
-                auto tp = std::chrono::steady_clock::now();
-                const int64_t nb = (int64_t) llama_n_batch(st->ctx);
-                int done = 0;
-                int rc = 0;
-                while (done < nPre) {
-                    int chunk = (int) std::min<int64_t>(nPre - done, nb);
-                    llama_batch pb = llama_batch_get_one(pre.data() + done, chunk);
-                    rc = llama_decode(st->ctx, pb);
-                    if (rc != 0) break;
-                    done += chunk;
-                }
-                double psec = std::chrono::duration<double>(
-                        std::chrono::steady_clock::now() - tp).count();
-                if (rc != 0) {
-                    log_line("[失败] 前缀 prefill ret=%d", rc);
-                } else {
-                    size_t sz = llama_state_seq_get_size(st->ctx, 0);
-                    st->sysKv.resize(sz);
-                    size_t got = llama_state_seq_get_data(st->ctx, st->sysKv.data(), sz, 0);
-                    st->sysText   = sysPrefix;
-                    st->sysTokLen = nPre;
-                    log_line("建立前缀缓存：%d token / %.2f 秒 / %.1f MB（只这一次）",
-                             nPre, psec, got / 1048576.0);
-                }
-            }
-        } else {
-            // 已有快照：清空后恢复，跳过前缀计算
-            if (mem) llama_memory_clear(mem, true);
-            auto tr = std::chrono::steady_clock::now();
-            size_t r = llama_state_seq_set_data(st->ctx, st->sysKv.data(), st->sysKv.size(), 0);
-            double rsec = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - tr).count();
-            if (r == 0) {
-                log_line("!! 前缀快照恢复失败，本轮退回完整计算");
-                st->sysKv.clear();
-                if (mem) llama_memory_clear(mem, true);
-            } else {
-                log_line("恢复前缀缓存：%d token / %.3f 秒（省掉一次完整 prefill）",
-                         st->sysTokLen, rsec);
-            }
+        size_t L = 0;
+        if (!st->lastSeq.empty() && st->lastNPast > 0) {
+            const size_t lim = std::min(tokens.size(), st->lastSeq.size());
+            while (L < lim && tokens[L] == st->lastSeq[L]) L++;
         }
-        n_past_base = st->sysTokLen > 0 && !st->sysKv.empty() ? st->sysTokLen : 0;
-        if (useCache && st->sysKv.empty()) n_past_base = 0;
+
+        if (L == 0 || mem == nullptr) {
+            if (mem) llama_memory_clear(mem, true);
+            log_line("KV 无可用前缀，全量 prefill %d token", n_tok);
+        } else {
+            // 截掉 L 之后的 KV，只保留可复用的那段
+            llama_memory_seq_rm(mem, 0, (llama_pos) L, -1);
+            log_line("KV 续接：复用 %zu token，只需再算 %d token（省下 %d）",
+                     L, n_tok - (int) L, (int) L);
+        }
+        kvReuse = (int) L;
+        n_past_base = 0;   // 前缀已算进 tokens 里，不再单独占位
     }
 
     // 前缀占了 n_past_base 个位置，前面那次 budget 计算是在"前缀为 0"的前提下做的，
@@ -878,10 +851,10 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     // 短句（<128 token）完全看不出问题，一带上历史会立刻暴露。
     // 正确做法：每块不超过 n_batch，逐块 decode，位置由 context 自动续接。
     set_stage("prefill");
-    log_line("prefill 开始，n_tok=%d", n_tok);
+    log_line("prefill 开始，n_tok=%d（其中 %d 个已在 KV 里）", n_tok, kvReuse);
     {
         const int64_t n_batch_max = (int64_t) llama_n_batch(st->ctx);
-        int done = 0;
+        int done = kvReuse;
         int n_chunk = 0;
         auto tc0 = std::chrono::steady_clock::now();
         while (done < n_tok) {
@@ -899,8 +872,9 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             done += chunk;
         }
         double csec = std::chrono::duration<double>(std::chrono::steady_clock::now() - tc0).count();
-        log_line("prefill 完成：%d token / %d 块 / %.2f 秒（%.1f tok/s）",
-                 n_tok, n_chunk, csec, csec > 0 ? n_tok / csec : 0.0);
+        int realNew = n_tok - kvReuse;
+        log_line("prefill 完成：新增 %d token / %d 块 / %.2f 秒（%.1f tok/s）",
+                 realNew, n_chunk, csec, csec > 0 ? realNew / csec : 0.0);
     }
     log_line("prefill 结束后可用内存 %ld MB", mem_available_mb());
 
@@ -929,6 +903,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
 
     auto tg0 = std::chrono::steady_clock::now();
     int n_gen = 0;
+    std::vector<llama_token> genToks;   // v10.14：记下生成内容，供下一轮续接判断
 
     for (int i = 0; i < budget; i++) {
         // v6.6：把当前 token 序号写进 stage。
@@ -973,6 +948,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             }
         }
 
+        genToks.push_back(next);
         llama_batch tb = llama_batch_get_one(&next, 1);
         if (llama_decode(st->ctx, tb) != 0) {
             g_lastError = "decode 失败";
@@ -995,8 +971,19 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
 
     llama_sampler_free(smpl);
     set_stage("idle");
+
+    // v10.14：把这轮的完整序列存下来（prompt + 生成的 token），下一轮据此续接
+    {
+        st->lastSeq.clear();
+        st->lastSeq.reserve(tokens.size() + genToks.size());
+        st->lastSeq.insert(st->lastSeq.end(), tokens.begin(), tokens.end());
+        st->lastSeq.insert(st->lastSeq.end(), genToks.begin(), genToks.end());
+        st->lastNPast = (int) st->lastSeq.size();
+        log_line("已记录本轮序列 %zu token，供下一轮续接", st->lastSeq.size());
+    }
+
     log_line("生成结束：%zu 字节 / %d tokens，可用内存 %ld MB",
-             full.size(), n_past - n_tok, mem_available_mb());
+             full.size(), n_gen, mem_available_mb());
     return env->NewStringUTF(full.c_str());
 }
 
