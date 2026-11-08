@@ -46,10 +46,15 @@ jobs:
           ls -l ggml/src/ggml-cpu/llamafile/sgemm.cpp
           python3 "$GITHUB_WORKSPACE/tools/patch_sgemm.py" ggml/src/ggml-cpu/llamafile/sgemm.cpp
 
-      - name: 配置 Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: 8.9
+      - name: 安装 Gradle（绕过 setup-gradle 的缓存服务）
+        run: |
+          # GitHub 的 actions cache 服务持续返回 504，
+          # setup-gradle / gradle-build-action 都会卡在这一步。
+          # 直接下发行版，不依赖它的缓存。
+          curl -fsSL --retry 3 "https://services.gradle.org/distributions/gradle-8.9-bin.zip" -o g.zip
+          unzip -q g.zip -d "$HOME"
+          echo "$HOME/gradle-8.9/bin" >> $GITHUB_PATH
+          "$HOME/gradle-8.9/bin/gradle" --version | head -5
 
       - name: 编译 Debug APK
         run: |
