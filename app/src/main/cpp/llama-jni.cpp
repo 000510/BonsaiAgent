@@ -620,10 +620,20 @@ Java_com_example_bonsaiagent_llm_Llama_init(
         return fail("创建上下文");
     }
 
+    // ★ v10.7 关键修复：线程数必须**显式设置**。
+    //
+    // 新版 llama.cpp 已经弃用 llama_context_params.n_threads 这个字段 ——
+    // 只往 cparams 里填是没用的，必须在 init 之后调 llama_set_n_threads()。
+    // 不调的话线程数退到库内默认值，于是：
+    //     用户设 1 线程、设 8 线程，跑出来速度一模一样。
+    // 之前把这现象误判成"内存带宽瓶颈"，其实是并行压根没开。
+    const uint32_t nth = cparams.n_threads > 0 ? cparams.n_threads : 4;
+    llama_set_n_threads(ctx, nth, nth);
+
     auto* st = new LlamaState{model, ctx};
-    log_line("上下文就绪 n_ctx=%u n_batch=%u n_ubatch=%u threads=%u，可用内存 %ld MB",
-             cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, cparams.n_threads,
-             mem_available_mb());
+    log_line("上下文就绪 n_ctx=%u n_batch=%u n_ubatch=%u 请求线程=%u 实际生效=%d，可用内存 %ld MB",
+             cparams.n_ctx, cparams.n_batch, cparams.n_ubatch, nth,
+             llama_n_threads(ctx), mem_available_mb());
     set_stage("idle");
     return reinterpret_cast<jlong>(st);
 }
