@@ -12,8 +12,8 @@ android {
         applicationId "com.example.bonsailite"
         minSdk 26            // Android 8.0，覆盖绝大多数现役手机
         targetSdk 34
-        versionCode 57
-        versionName "10.19"
+        versionCode 58
+        versionName "10.20"
 
         // 只编 arm64（手机主流，体积也小）
         ndk { abiFilters 'arm64-v8a' }
@@ -92,4 +92,14 @@ dependencies {
 
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'   // 用于调用 DeepSeek 云端
+
+    // v10.20：LiteRT-LM —— 走天玑 9300 的 NPU 推理。
+    //
+    // 为什么值得：llama.cpp 在联发科阵营没有 NPU 后端（只有高通的 ggml-hexagon），
+    // 而 Google 与联发科合作的 LiteRT NeuroPilot Accelerator 官方支持 MT6989（9300）。
+    // 预期 prefill 能到 100+ tok/s，decode 15~25 tok/s。
+    //
+    // 注意：这条依赖如果拉不下来或要求更高 compileSdk，编译会直接报错，
+    // 到时候把这一行注释掉即可回到纯 llama.cpp 路径。
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.17.1'
 }
