@@ -40,6 +40,10 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         OutlinedButton(onClick = { vm.refreshApps() }) {
             Text("刷新应用列表（已识别 ${vm.appCount.value} 个）")
         }
+        // v10.23：探测系统里有没有联发科 NPU 运行时库
+        OutlinedButton(onClick = { vm.probeNpu() }) {
+            Text("探测 NPU 库（查 /vendor/lib64）")
+        }
 
         // v10.22：模型管理 —— 私有目录里的模型会一直堆着不删，
         // 实测堆到 11.83 GB（三值模型好几份 + 各家 gguf），把手机撑爆。

@@ -181,6 +181,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 目的：日志动辄几百行，在手机上长按选择再复制非常难受，
      * 这里只截最有用的部分（崩溃现场 + 日志末尾 + 底层输出末尾）。
      */
+    /**
+     * v10.23：探测系统里有没有联发科的 NPU 运行时库。
+     *
+     * 背景：LiteRT 的 NPU 后端报 "No dispatch library found in .../lib/arm64"，
+     * 它在 App 自己的 so 目录里找，当然找不到。
+     * 但联发科通常会把 NPU 运行时预装在 /vendor/lib64/ 下（厂商分区）。
+     * 如果那里有，就可以把 Backend.NPU 的路径指过去。
+     */
+    fun probeNpu() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val sb = StringBuilder()
+            val dirs = listOf("/vendor/lib64", "/vendor/lib", "/system/lib64", "/system/lib", "/odm/lib64")
+            val keys = listOf("neuron", "apu", "mtknn", "nnapi", "mediatek", "mtk_nn", "dispatch", "neuropilot", "aiot")
+            var found = 0
+            for (d in dirs) {
+                val f = java.io.File(d)
+                if (!f.exists()) { sb.appendLine("$d 不存在"); continue }
+                if (!f.canRead()) { sb.appendLine("$d 不可读（权限）"); continue }
+                val hits = f.listFiles()?.filter { file ->
+                    val n = file.name.lowercase()
+                    keys.any { n.contains(it) }
+                } ?: emptyList()
+                if (hits.isEmpty()) { sb.appendLine("$d 可读，但没匹配到"); continue }
+                found += hits.size
+                sb.appendLine("$d 命中 ${hits.size} 个：")
+                hits.take(25).forEach { sb.appendLine("  ${it.name}  ${it.length() / 1024} KB") }
+            }
+            sb.appendLine()
+            sb.appendLine(if (found > 0) "小结：找到 $found 个候选库，可以试着把 NPU 路径指过去"
+                                   else "小结：系统里没有联发科的 NPU 运行时库")
+            withContext(Dispatchers.Main) { status.value = sb.toString().trim() }
+        }
+    }
+
     /** 设置页「刷新应用列表」：重新读一遍系统应用清单 */
     fun refreshApps() {
         viewModelScope.launch(Dispatchers.IO) {
