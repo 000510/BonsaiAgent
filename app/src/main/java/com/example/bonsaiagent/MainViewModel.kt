@@ -377,6 +377,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val sb = StringBuilder()
             sb.appendLine("=== NPU 深度探测 ===")
 
+            // ⓪ v10.28：先确认 Google 官方 NPU 运行时有没有打进 APK
+            sb.appendLine("--- App 自带库（nativeLibraryDir）---")
+            val libDir = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
+            val appLibs = try { java.io.File(libDir).listFiles() } catch (_: Throwable) { null } ?: emptyArray()
+            sb.appendLine("$libDir 共 ${appLibs.size} 个")
+            val npuOwn = appLibs.filter {
+                val n = it.name.lowercase()
+                n.contains("dispatch") || n.contains("litert") || n.contains("neuron") || n.contains("plugin")
+            }
+            if (npuOwn.isEmpty()) sb.appendLine("  ❌ 没有 dispatch/plugin 库（依赖没打进来）")
+            for (f in npuOwn) {
+                sb.appendLine("  ${f.name} len=${f.length()}")
+                if (f.name.contains("Dispatch")) {
+                    sb.appendLine("     → ${Llama.probeDlopen(f.absolutePath)}")
+                }
+            }
+
             // ① 白名单
             val whitelist = listOf(
                 "/vendor/etc/public.libraries.txt",
