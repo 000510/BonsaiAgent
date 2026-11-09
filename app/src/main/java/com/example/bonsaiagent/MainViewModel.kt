@@ -378,6 +378,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val sb = StringBuilder()
             sb.appendLine("=== NPU 深度探测 ===")
 
+            // v10.34：先扫所有系统库目录（这一步不加载模型，不发烫）
+            val scanDirs = listOf(
+                "/system_ext/lib64", "/system/lib64", "/product/lib64", "/odm/lib64",
+                "/vendor/lib64", "/vendor/lib64/mt6989", "/vendor/lib64/hw",
+                "/system_ext/lib64/hw", "/vendor/dsp", "/system_ext/lib", "/system/lib"
+            )
+            sb.appendLine("--- 全系统库目录扫描 ---")
+            var foundAdapter = false
+            for (d in scanDirs) {
+                val dir = java.io.File(d)
+                if (!dir.exists()) { sb.appendLine("  $d：不存在"); continue }
+                val kids = try { dir.listFiles() } catch (_: Throwable) { null }
+                if (kids == null) { sb.appendLine("  $d：存在但列不出来（权限）"); continue }
+                val hits = kids.filter {
+                    val n = it.name.lowercase()
+                    n.contains("neuron") || n.contains("_apu") || n.contains("nir_") || n.contains("neuropilot")
+                }
+                sb.appendLine("  $d：${kids.size} 个文件，命中 ${hits.size}")
+                for (h in hits.take(15)) {
+                    val flag = if (h.name.contains("adapter") && h.length() > 1024) {
+                        foundAdapter = true; " ★可用"
+                    } else ""
+                    sb.appendLine("     ${h.name} len=${h.length()} read=${h.canRead()}$flag")
+                }
+            }
+            sb.appendLine(if (foundAdapter) "⇒ 找到疑似可用的 adapter！" else "⇒ 仍未找到可用的 adapter")
+
             // ⓪ v10.28：先确认 Google 官方 NPU 运行时有没有打进 APK
             sb.appendLine("--- App 自带库（nativeLibraryDir）---")
             val libDir = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
