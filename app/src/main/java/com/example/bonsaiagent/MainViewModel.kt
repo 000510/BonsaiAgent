@@ -603,7 +603,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 java.io.File(libDir).listFiles()?.firstOrNull { it.name == n }?.length()
             } catch (_: Throwable) { null }
             step("dispatch 库=${inApk("libLiteRtDispatch_MediaTek.so")} 字节, adapter=${inApk("libneuron_adapter.so")} 字节")
-            step("起始内存 $memInfo()")
+            step("起始内存 ${memInfo()}")
 
             val adaLog = java.io.File(app.filesDir, "npu_adapter.log")
             try { if (adaLog.exists()) adaLog.delete() } catch (_: Throwable) {}
@@ -625,14 +625,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } catch (t: Throwable) {
                     step("① load 抛异常 ${t.javaClass.simpleName}: ${t.message}")
                 }
-                step("① load 返回=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000}s 内存 $memInfo()")
+                step("① load 返回=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000}s 内存 ${memInfo()}")
 
                 if (ok) {
                     step("② 当前后端=${LiteRtEngine.currentBackend()}")
                     step("③ 新建会话…")
                     try {
                         LiteRtEngine.newConversation("你是助手，回答简短。", 0.7, 40, 0.95)
-                        step("③ 会话就绪，内存 $memInfo()")
+                        step("③ 会话就绪，内存 ${memInfo()}")
                         step("④ 开始生成（最容易崩的一步）…")
                         val g0 = System.currentTimeMillis()
                         val out = LiteRtEngine.generate("说一句话", 90) { }
@@ -641,7 +641,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         step("③/④ 异常 ${t.javaClass.simpleName}: ${t.message}")
                     }
                 }
-                step("收尾内存 $memInfo()")
+                step("收尾内存 ${memInfo()}")
             }
 
             if (adaLog.exists() && adaLog.length() > 0) {
