@@ -18,6 +18,7 @@ import com.example.bonsaiagent.agent.RouteResult
 import com.example.bonsaiagent.api.LocalApiServer
 import com.example.bonsaiagent.data.AgentSettings
 import com.example.bonsaiagent.data.SettingsStore
+import com.example.bonsaiagent.llm.ElfDump
 import com.example.bonsaiagent.llm.GgufTypeFixer
 import com.example.bonsaiagent.llm.LiteRtEngine
 import com.example.bonsaiagent.llm.Llama
@@ -501,6 +502,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             // 也直接试系统路径
             sb.appendLine("直连: ${Llama.probeDlopen("/vendor/lib64/libneuron_runtime.7.so")}")
+
+            // ⑦ v10.29【决定性】runtime 里还有没有可用的 C API
+            // 有 → 可以自己写 adapter 顶替那个被裁掉的空壳；没有 → NPU 彻底封死
+            sb.appendLine("--- runtime 导出符号 ---")
+            val rtFile = java.io.File(
+                getApplication<android.app.Application>().filesDir, "libneuron_runtime.7.so")
+            if (!rtFile.exists() || rtFile.length() == 0L) {
+                sb.appendLine("运行时副本不存在（上一步复制失败），无法解析")
+            } else {
+                val all = ElfDump.dynamicSymbols(rtFile)
+                val cApi = ElfDump.cApiOnly(all)
+                val npuApi = cApi.filter { ElfDump.looksLikeNeuron(it.name) }
+                sb.appendLine("动态符号 ${all.size} 个 / C 风格 ${cApi.size} 个 / 疑似 NPU API ${npuApi.size} 个")
+                if (all.isEmpty()) {
+                    sb.appendLine("⇒ 符号表为空：runtime 已被 strip，写 adapter 这条路判死")
+                } else {
+                    sb.appendLine("前 50 个 C 风格符号：")
+                    cApi.take(50).forEach { sb.appendLine("  ${it.name} size=${it.size}") }
+                    if (npuApi.isNotEmpty()) {
+                        sb.appendLine("疑似 NPU API：")
+                        npuApi.take(60).forEach { sb.appendLine("  ★ ${it.name} size=${it.size}") }
+                    }
+                }
+            }
+
+            // 摘要放最后 —— 诊断报告只抓 run_log 末尾，这样才不会被截掉
+            sb.appendLine("--- 探针摘要 ---")
+            val libDir2 = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
+            val disp = try {
+                java.io.File(libDir2).listFiles()?.firstOrNull { it.name.contains("Dispatch") }
+            } catch (_: Throwable) { null }
+            sb.appendLine(
+                if (disp != null) "Google 官方 dispatch 库：已在 APK 内（${disp.length()} 字节）"
+                else "Google 官方 dispatch 库：❌ 不在 APK 内（依赖没打进来）"
+            )
 
             try {
                 val lf = java.io.File(
