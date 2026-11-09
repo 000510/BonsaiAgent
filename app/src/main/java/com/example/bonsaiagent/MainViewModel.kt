@@ -220,6 +220,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sb.appendLine()
             sb.appendLine(if (found > 0) "小结：找到 $found 个候选库，可以试着把 NPU 路径指过去"
                                    else "小结：系统里没有联发科的 NPU 运行时库")
+
+            // ★ 同时写进 run_log.txt —— 状态栏文字不会进诊断，
+            // 上一版探测过一次，但导出诊断里什么都没有，白跑一趟。
+            try {
+                val lf = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
+                lf.appendText("\n=== NPU 库探测 ===\n" + sb.toString())
+            } catch (_: Throwable) {}
+
             withContext(Dispatchers.Main) { status.value = sb.toString().trim() }
         }
     }
@@ -265,7 +273,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val key = all.readLines().filter {
                     it.contains("上下文就绪") || it.contains("n_threads") || it.contains("线程") ||
                     it.contains("KV") || it.contains("续接") || it.contains("前缀") ||
-                    it.contains("prefill") || it.contains("prompt ")
+                    it.contains("prefill") || it.contains("prompt ") ||
+                    it.contains("NPU") || it.contains("vendor/lib") || it.contains("neuron") ||
+                    it.contains("Libre") || it.contains("litert")
                 }.takeLast(14)   // v10.15：KV 续接/前缀复用是核心指标，必须能看到
                 if (key.isNotEmpty()) {
                     sb.appendLine("--- 关键行 ---")
@@ -349,6 +359,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshModels() {
         modelFiles.clear()
         modelFiles.addAll(ModelLoader.listModels(getApplication()))
+    }
+
+    /** v10.25：从模型列表直接加载（不用再去文件选择器里翻） */
+    fun loadModelFile(f: java.io.File) {
+        if (!f.exists()) { status.value = "文件不见了：${f.name}"; refreshModels(); return }
+        modelPath.value = f.absolutePath
+        status.value = "正在加载 ${f.name}…"
+        loadModel()
     }
 
     fun deleteModelFile(f: java.io.File) {

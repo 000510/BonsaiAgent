@@ -62,6 +62,10 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                // v10.25：直接在这里加载/删除，不用再跑文件夹里挑
+                TextButton(onClick = { vm.loadModelFile(f) }) {
+                    Text("加载")
+                }
                 TextButton(onClick = { vm.deleteModelFile(f) }) {
                     Text("删除", color = MaterialTheme.colorScheme.error)
                 }
