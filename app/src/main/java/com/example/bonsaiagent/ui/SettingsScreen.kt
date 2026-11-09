@@ -48,6 +48,11 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         OutlinedButton(onClick = { vm.probeNpuDeep() }) {
             Text("NPU 终极探测 + adapter 自检")
         }
+        // v10.31：一键自检 —— 自动用 NPU 后端加载 .litertlm 并生成一句话，
+        // 把 LiteRT 真的推到 dispatch → adapter 这条线上
+        OutlinedButton(onClick = { vm.probeNpuRun() }) {
+            Text("⚡ 一键 NPU 自检（自动跑一次推理）")
+        }
 
         // v10.22：模型管理 —— 私有目录里的模型会一直堆着不删，
         // 实测堆到 11.83 GB（三值模型好几份 + 各家 gguf），把手机撑爆。

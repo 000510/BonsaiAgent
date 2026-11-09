@@ -569,6 +569,74 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** v10.25：从模型列表直接加载（不用再去文件选择器里翻） */
+    /**
+     * v10.31：一键 NPU 自检 —— 不需要用户手工"选后端→加载模型→发消息"，
+     * 直接以 NPU 后端加载 .litertlm 并生成一句话。
+     * 目的：把 LiteRT 真正推到 dispatch → adapter 这条线上，让自造 adapter 被 dlopen。
+     */
+    fun probeNpuRun() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val sb = StringBuilder()
+            sb.appendLine("=== NPU 一键自检（v10.31）===")
+            val app = getApplication<android.app.Application>()
+            val libDir = app.applicationInfo.nativeLibraryDir
+            fun inApk(n: String) = try {
+                java.io.File(libDir).listFiles()?.firstOrNull { it.name == n }
+            } catch (_: Throwable) { null }
+            sb.appendLine("dispatch 库：" + (inApk("libLiteRtDispatch_MediaTek.so")?.let { "${it.length()} 字节" } ?: "缺失"))
+            sb.appendLine("自造 adapter：" + (inApk("libneuron_adapter.so")?.let { "${it.length()} 字节" } ?: "缺失"))
+
+            // 清掉上一轮的 adapter 日志，保证看到的是本次
+            val adaLog = java.io.File(app.filesDir, "npu_adapter.log")
+            try { if (adaLog.exists()) adaLog.delete() } catch (_: Throwable) {}
+
+            val models = java.io.File(app.filesDir, "models").listFiles()
+                ?.filter { it.name.endsWith(".litertlm") } ?: emptyList()
+            if (models.isEmpty()) {
+                sb.appendLine("❌ 没找到 .litertlm 模型，无法自检")
+            } else {
+                val m = models.maxByOrNull { it.length() }!!
+                sb.appendLine("模型：${m.name}（${m.length()} 字节）")
+                try { LiteRtEngine.unload() } catch (_: Throwable) {}
+                status.value = "NPU 自检：正在加载模型…"
+                val t0 = System.currentTimeMillis()
+                val ok = try {
+                    LiteRtEngine.load(app, m.absolutePath, "NPU", settings.value.threads)
+                } catch (t: Throwable) {
+                    sb.appendLine("load 抛异常：${t.javaClass.simpleName} ${t.message}")
+                    false
+                }
+                sb.appendLine("load 结果=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000} 秒")
+                if (ok) {
+                    sb.appendLine("当前后端=${LiteRtEngine.currentBackend()}")
+                    status.value = "NPU 自检：正在生成…"
+                    try {
+                        LiteRtEngine.newConversation("你是助手，回答简短。", 0.7, 40, 0.95)
+                        val out = LiteRtEngine.generate("说一句话", 120) { }
+                        sb.appendLine("生成成功，输出 ${out.length} 字：${out.take(80)}")
+                    } catch (t: Throwable) {
+                        sb.appendLine("生成异常：${t.javaClass.simpleName} ${t.message}")
+                    }
+                }
+            }
+
+            // 把 adapter 的调用轨迹附在最后 —— 诊断只抓 run_log 末尾
+            sb.appendLine("--- adapter 调用轨迹 ---")
+            if (adaLog.exists() && adaLog.length() > 0) {
+                val lines = adaLog.readLines()
+                sb.appendLine("共 ${lines.size} 行，全部输出：")
+                lines.takeLast(60).forEach { sb.appendLine("  $it") }
+            } else {
+                sb.appendLine("❌ 为空：LiteRT 没走到 NPU 路径，或者 adapter 没被 dlopen")
+            }
+
+            try {
+                java.io.File(app.filesDir, "run_log.txt").appendText("\n" + sb.toString())
+            } catch (_: Throwable) {}
+            status.value = "NPU 自检完成（${sb.length()} 字日志）"
+        }
+    }
+
     fun loadModelFile(f: java.io.File) {
         if (!f.exists()) { status.value = "文件不见了：${f.name}"; refreshModels(); return }
         modelPath.value = f.absolutePath
