@@ -428,6 +428,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 sb.appendLine("源文件不可读，无法测试复制")
             }
 
+            // ④ 递归找所有 neuron/adapter 库（顶层只有坏链接，真身可能在子目录）
+            sb.appendLine("--- 递归扫描 neuron 库 ---")
+            val hitLibs = mutableListOf<String>()
+            fun walk(dir: java.io.File, depth: Int) {
+                if (depth > 2) return
+                val kids = try { dir.listFiles() } catch (_: Throwable) { null } ?: return
+                for (k in kids) {
+                    val n = k.name.lowercase()
+                    if (k.isDirectory) { walk(k, depth + 1); continue }
+                    if (n.contains("neuron") || n.contains("_apu") || n.contains("apu_") ||
+                        n.contains("armnn") || n.contains("nir_neon") || n.contains("neuropilot")) {
+                        val canon = try { k.canonicalPath } catch (_: Throwable) { k.absolutePath }
+                        hitLibs.add("${k.absolutePath} → ${canon} len=${k.length()} read=${k.canRead()}")
+                    }
+                }
+            }
+            walk(java.io.File("/vendor/lib64"), 0)
+            sb.appendLine("共 ${hitLibs.size} 个")
+            hitLibs.take(40).forEach { sb.appendLine("  $it") }
+
+            // ⑤ NPU 设备节点（就算库能加载，打不开设备节点也是白搭）
+            sb.appendLine("--- NPU 设备节点 ---")
+            val devs = try { java.io.File("/dev").listFiles() } catch (_: Throwable) { null } ?: emptyArray()
+            val npuDevs = devs.filter {
+                val n = it.name.lowercase()
+                n.contains("apu") || n.contains("neuron") || n.contains("npu") || n.contains("mdla")
+            }
+            if (npuDevs.isEmpty()) sb.appendLine("/dev 下没有 apu/npu/mdla 节点")
+            for (d in npuDevs) {
+                val canOpen = try { java.io.FileInputStream(d).use { it.read() ; true } } catch (_: Throwable) { false }
+                sb.appendLine("  ${d.absolutePath} len=${d.length()} canRead=${d.canRead()} canOpen=$canOpen")
+            }
+
+            // ⑥ 决定性一步：把 runtime 复制到私有目录后真的 dlopen
+            sb.appendLine("--- dlopen 实测 ---")
+            val copies = listOf(
+                "/vendor/lib64/libneuron_runtime.7.so",
+                "/vendor/lib64/libneuron_platform.so"
+            )
+            for (c in copies) {
+                val f = java.io.File(c)
+                if (!f.canRead() || f.length() == 0L) {
+                    sb.appendLine("${f.name}: 跳过（不可读或 0 字节）")
+                    continue
+                }
+                val dst = java.io.File(
+                    getApplication<android.app.Application>().filesDir, f.name)
+                try {
+                    f.inputStream().use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
+                    sb.appendLine("${f.name} 复制 ${dst.length()} 字节 → ${Llama.probeDlopen(dst.absolutePath)}")
+                } catch (t: Throwable) {
+                    sb.appendLine("${f.name} 复制失败：${t.javaClass.simpleName} ${t.message}")
+                }
+            }
+            // 也直接试系统路径
+            sb.appendLine("直连: ${Llama.probeDlopen("/vendor/lib64/libneuron_runtime.7.so")}")
+
             try {
                 val lf = java.io.File(
                     getApplication<android.app.Application>().filesDir, "run_log.txt")

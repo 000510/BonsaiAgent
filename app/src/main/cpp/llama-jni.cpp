@@ -1018,3 +1018,35 @@ Java_com_example_bonsaiagent_llm_Llama_freeNative(JNIEnv*, jobject, jlong handle
     delete st;
     log_line("已释放模型");
 }
+
+// ---------------------------------------------------------------------------
+// v10.27：NPU 库可达性验证
+// 直接把路径丢给 dlopen，返回真实的 dlerror 文本 —— 失败原因（namespace 拦截 /
+// 依赖缺失 / ELF 不兼容）只能这样拿到，Kotlin 层看不到细节。
+// 用 RTLD_LAZY 避免未定义符号在 load 阶段就炸掉进程。
+// ---------------------------------------------------------------------------
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_bonsaiagent_llm_Llama_dlopenProbe(JNIEnv* env, jobject, jstring jpath) {
+    const char* p = env->GetStringUTFChars(jpath, nullptr);
+    std::string path = p ? p : "";
+    env->ReleaseStringUTFChars(jpath, p);
+
+    std::string out;
+    struct stat st{};
+    if (::stat(path.c_str(), &st) != 0) {
+        out = "stat 失败 errno=" + std::to_string(errno);
+    } else {
+        out = "size=" + std::to_string((long long) st.st_size);
+        dlerror();
+        void* h = ::dlopen(path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+        const char* e = dlerror();
+        if (h) {
+            out += " | dlopen=OK";
+            ::dlclose(h);
+        } else {
+            out += " | dlopen 失败: ";
+            out += (e ? e : "(无 dlerror)");
+        }
+    }
+    return env->NewStringUTF(out.c_str());
+}

@@ -39,6 +39,13 @@ object Llama {
                                   maxTokens: Int): String
     private external fun freeNative(handle: Long)
 
+    /** v10.27：把任意路径丢给原生 dlopen，返回 size + 成败 + 真实 dlerror */
+    private external fun dlopenProbe(path: String): String
+
+    fun probeDlopen(path: String): String = try { dlopenProbe(path) } catch (t: Throwable) {
+        "JNI 异常: ${t.javaClass.simpleName} ${t.message}"
+    }
+
     fun isLoaded(): Boolean = handle != 0L
 
     /** 加载 .gguf 模型；threads 建议 = CPU 大核数，nCtx = 上下文窗口 */
