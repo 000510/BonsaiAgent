@@ -46,7 +46,7 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         }
         // v10.26：深度探测 —— 查白名单 + 能不能真的读出来
         OutlinedButton(onClick = { vm.probeNpuDeep() }) {
-            Text("NPU 终极探测（dump runtime 符号）")
+            Text("NPU 终极探测 + adapter 自检")
         }
 
         // v10.22：模型管理 —— 私有目录里的模型会一直堆着不删，

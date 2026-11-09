@@ -537,6 +537,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (disp != null) "Google 官方 dispatch 库：已在 APK 内（${disp.length()} 字节）"
                 else "Google 官方 dispatch 库：❌ 不在 APK 内（依赖没打进来）"
             )
+            val ownAdapter = try {
+                java.io.File(libDir2).listFiles()?.firstOrNull {
+                    it.name == "libneuron_adapter.so" || it.name.startsWith("libneuron_adapter")
+                }
+            } catch (_: Throwable) { null }
+            sb.appendLine(
+                if (ownAdapter != null) "自造 adapter：已在 APK 内（${ownAdapter.length()} 字节）"
+                else "自造 adapter：❌ 不在 APK 内"
+            )
+            val adaLog = java.io.File(
+                getApplication<android.app.Application>().filesDir, "npu_adapter.log")
+            if (adaLog.exists()) {
+                sb.appendLine("adapter 调用日志：${adaLog.length()} 字节，最后 20 行：")
+                try {
+                    adaLog.readLines().takeLast(20).forEach { sb.appendLine("  $it") }
+                } catch (_: Throwable) {}
+            } else {
+                sb.appendLine("adapter 调用日志：尚未产生（说明 LiteRT 还没走到 NPU 推理）")
+            }
+
 
             try {
                 val lf = java.io.File(

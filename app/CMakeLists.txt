@@ -148,3 +148,12 @@ target_link_options(bonsai_llm PRIVATE
     -Wl,--wrap=__stack_chk_fail
     -Wl,--wrap=__fortify_fail
 )
+
+# ---------------------------------------------------------------------------
+# v10.30：我们自己造的 NeuronAdapter（顶替被厂商裁掉的那个空壳）
+# 产物名必须是 libneuron_adapter.so —— LiteRT 的 MTK dispatch 第一顺位就找它，
+# 且路径是 <nativeLibraryDir>/libneuron_adapter.so，正好是 APK 打到 lib/arm64-v8a 的位置。
+# ---------------------------------------------------------------------------
+add_library(neuron_adapter SHARED ${CMAKE_SOURCE_DIR}/src/main/cpp/npu_adapter_probe.cpp)
+set_target_properties(neuron_adapter PROPERTIES OUTPUT_NAME "neuron_adapter")
+target_link_libraries(neuron_adapter ${log-lib} dl)
