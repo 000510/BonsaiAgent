@@ -84,6 +84,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** LiteRT 的 Conversation 是否已建立（它自己管历史，不用每轮重建） */
     private var conversationReady = false
 
+    /**
+     * v10.22：私有目录里的模型列表（用于管理/删除）。
+     *
+     * ⚠️ 必须在 init 块之前声明 —— Kotlin 按声明顺序初始化，
+     * 放后面的话 init 里调 refreshModels() 会访问到未初始化的字段，直接 NPE 闪退。
+     * （v10.23 就这么崩过一次：App 一打开就闪退）
+     */
+    val modelFiles = mutableStateListOf<java.io.File>()
+
     init {
         // v10.0：后台扫一遍手机里装了哪些应用，给「打开微信」这类指令用。
         // 有缓存就直接读缓存（毫秒级），没缓存才真的去问系统。
@@ -337,9 +346,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 从系统选择器导入 .gguf 并加载 */
-    /** v10.22：私有目录里的模型列表（用于管理/删除） */
-    val modelFiles = mutableStateListOf<java.io.File>()
-
     fun refreshModels() {
         modelFiles.clear()
         modelFiles.addAll(ModelLoader.listModels(getApplication()))
