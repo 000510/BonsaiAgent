@@ -46,7 +46,7 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         }
         // v10.26：深度探测 —— 查白名单 + 能不能真的读出来
         OutlinedButton(onClick = { vm.probeNpuDeep() }) {
-            Text("NPU 终极探测 + adapter 自检")
+            Text("NPU 终极探测（扫 system_ext）")
         }
         // v10.31：一键自检 —— 自动用 NPU 后端加载 .litertlm 并生成一句话，
         // 把 LiteRT 真的推到 dispatch → adapter 这条线上

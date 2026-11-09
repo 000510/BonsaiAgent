@@ -602,8 +602,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             fun inApk(n: String) = try {
                 java.io.File(libDir).listFiles()?.firstOrNull { it.name == n }?.length()
             } catch (_: Throwable) { null }
-            step("dispatch 库=${inApk("libLiteRtDispatch_MediaTek.so")} 字节, adapter=${inApk("libneuron_adapter.so")} 字节")
+            step("dispatch=${inApk("libLiteRtDispatch_MediaTek.so")}B, 自造adapter(已改名不再顶替)=${inApk("libneuron_probe_fake.so")}B")
             step("起始内存 ${memInfo()}")
+
+            // v10.33：扫遍所有可能的系统库目录 —— 之前只扫了 /vendor/lib64，
+            // 而 LiteRT 官方示例说 NeuroPilot 运行时在 **/system_ext/lib64/**，这块从没看过。
+            val libDirs = listOf(
+                "/system_ext/lib64", "/system/lib64", "/product/lib64", "/odm/lib64",
+                "/vendor/lib64", "/vendor/lib64/mt6989", "/vendor/lib64/hw",
+                "/system_ext/lib64/hw", "/vendor/dsp"
+            )
+            step("--- 系统库目录扫描 ---")
+            for (d in libDirs) {
+                val dir = java.io.File(d)
+                if (!dir.exists()) { step("  $d：不存在"); continue }
+                val kids = try { dir.listFiles() } catch (_: Throwable) { null }
+                if (kids == null) { step("  $d：存在但列不出来"); continue }
+                val hits = kids.filter {
+                    val n = it.name.lowercase()
+                    n.contains("neuron") || n.contains("_apu") || n.contains("nir_") || n.contains("neuropilot")
+                }
+                step("  $d：共 ${kids.size} 个文件，命中 ${hits.size} 个")
+                hits.take(12).forEach {
+                    step("     ${it.name} len=${it.length()} read=${it.canRead()}")
+                }
+            }
+            step("--- 扫描结束 ---")
 
             val adaLog = java.io.File(app.filesDir, "npu_adapter.log")
             try { if (adaLog.exists()) adaLog.delete() } catch (_: Throwable) {}
