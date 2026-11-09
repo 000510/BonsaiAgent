@@ -361,6 +361,83 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         modelFiles.addAll(ModelLoader.listModels(getApplication()))
     }
 
+    /**
+     * v10.26：NPU 深度探测 —— 判断"库在系统里"和"App 能用"之间的那道墙。
+     *
+     * Android 的 linker namespace 规定：只有被列入 public.libraries.txt 的库，
+     * 第三方 App 才允许 dlopen。其它一律被拒（即使文件在那儿、SELinux 也放行）。
+     *
+     * 所以这里查三件事：
+     *   ① 白名单文件里有没有 neuron
+     *   ② 库文件的实际大小（能不能 stat，0 表示符号链接或读不到）
+     *   ③ 能不能真的复制出来（能复制 = 可读）
+     */
+    fun probeNpuDeep() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val sb = StringBuilder()
+            sb.appendLine("=== NPU 深度探测 ===")
+
+            // ① 白名单
+            val whitelist = listOf(
+                "/vendor/etc/public.libraries.txt",
+                "/etc/public.libraries.txt",
+                "/system/etc/public.libraries.txt"
+            )
+            var wlFound = false
+            for (w in whitelist) {
+                val f = java.io.File(w)
+                if (!f.exists()) { sb.appendLine("$w 不存在"); continue }
+                if (!f.canRead()) { sb.appendLine("$w 存在但不可读"); continue }
+                wlFound = true
+                val lines = try { f.readLines() } catch (_: Throwable) { emptyList() }
+                val hit = lines.filter {
+                    val l = it.lowercase()
+                    l.contains("neuron") || l.contains("apu") || l.contains("mtk") || l.contains("neuropilot")
+                }
+                sb.appendLine("$w 共 ${lines.size} 行，其中神经相关 ${hit.size} 条")
+                hit.take(10).forEach { sb.appendLine("   → $it") }
+            }
+            if (!wlFound) sb.appendLine("小结：白名单文件全都读不到")
+
+            // ② 具体库的真实大小
+            val libs = listOf(
+                "/vendor/lib64/libneuron_adapter_mgvi.so",
+                "/vendor/lib64/libneuron_adapter.so",
+                "/vendor/lib64/libneuron_runtime.7.so",
+                "/vendor/lib64/libneuron_runtime.so"
+            )
+            sb.appendLine("--- 具体库 ---")
+            for (l in libs) {
+                val f = java.io.File(l)
+                sb.appendLine("${f.name}  exists=${f.exists()} len=${f.length()} canRead=${f.canRead()}")
+            }
+
+            // ③ 真复制一个试试（复制成功 = 真的能读）
+            sb.appendLine("--- 复制测试 ---")
+            val src = java.io.File("/vendor/lib64/libneuron_runtime.7.so")
+            if (src.exists() && src.canRead()) {
+                try {
+                    val dst = java.io.File(
+                        getApplication<android.app.Application>().filesDir, "npu_probe.so")
+                    src.inputStream().use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
+                    sb.appendLine("复制成功：${dst.length()} 字节（说明可读）")
+                } catch (t: Throwable) {
+                    sb.appendLine("复制失败：${t.javaClass.simpleName} ${t.message}")
+                }
+            } else {
+                sb.appendLine("源文件不可读，无法测试复制")
+            }
+
+            try {
+                val lf = java.io.File(
+                    getApplication<android.app.Application>().filesDir, "run_log.txt")
+                lf.appendText("\n" + sb.toString())
+            } catch (_: Throwable) {}
+
+            withContext(Dispatchers.Main) { status.value = sb.toString().trim() }
+        }
+    }
+
     /** v10.25：从模型列表直接加载（不用再去文件选择器里翻） */
     fun loadModelFile(f: java.io.File) {
         if (!f.exists()) { status.value = "文件不见了：${f.name}"; refreshModels(); return }
