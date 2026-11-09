@@ -576,64 +576,85 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun probeNpuRun() {
         viewModelScope.launch(Dispatchers.IO) {
-            val sb = StringBuilder()
-            sb.appendLine("=== NPU 一键自检（v10.31）===")
             val app = getApplication<android.app.Application>()
+            val lf = java.io.File(app.filesDir, "run_log.txt")
+            val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+
+            // v10.32：每一步立刻落盘 —— 之前是攒到最后一次性写，
+            // 一旦闪退就什么都不剩，等于睁眼瞎。现在闪退也能看到死在哪一行。
+            fun step(msg: String) {
+                try { lf.appendText("[NPU自检 ${fmt.format(java.util.Date())}] $msg\n") } catch (_: Throwable) {}
+                status.value = msg
+            }
+            fun memInfo(): String = try {
+                val mi = java.io.File("/proc/meminfo").readText()
+                val avail = Regex("MemAvailable:\\s+(\\d+)").find(mi)?.groupValues?.get(1)?.toLong()?.div(1024)
+                val rss = try {
+                    java.io.File("/proc/self/status").readLines()
+                        .firstOrNull { it.startsWith("VmRSS:") }
+                        ?.replace(Regex("[^0-9]"), "")?.toLong()?.div(1024)
+                } catch (_: Throwable) { null }
+                "系统可用=${avail}MB 本进程=${rss}MB"
+            } catch (_: Throwable) { "内存读取失败" }
+
+            step("====== NPU 自检开始（v10.32）======")
             val libDir = app.applicationInfo.nativeLibraryDir
             fun inApk(n: String) = try {
-                java.io.File(libDir).listFiles()?.firstOrNull { it.name == n }
+                java.io.File(libDir).listFiles()?.firstOrNull { it.name == n }?.length()
             } catch (_: Throwable) { null }
-            sb.appendLine("dispatch 库：" + (inApk("libLiteRtDispatch_MediaTek.so")?.let { "${it.length()} 字节" } ?: "缺失"))
-            sb.appendLine("自造 adapter：" + (inApk("libneuron_adapter.so")?.let { "${it.length()} 字节" } ?: "缺失"))
+            step("dispatch 库=${inApk("libLiteRtDispatch_MediaTek.so")} 字节, adapter=${inApk("libneuron_adapter.so")} 字节")
+            step("起始内存 $memInfo()")
 
-            // 清掉上一轮的 adapter 日志，保证看到的是本次
             val adaLog = java.io.File(app.filesDir, "npu_adapter.log")
             try { if (adaLog.exists()) adaLog.delete() } catch (_: Throwable) {}
 
             val models = java.io.File(app.filesDir, "models").listFiles()
                 ?.filter { it.name.endsWith(".litertlm") } ?: emptyList()
             if (models.isEmpty()) {
-                sb.appendLine("❌ 没找到 .litertlm 模型，无法自检")
+                step("❌ 没有 .litertlm 模型，自检中止")
             } else {
                 val m = models.maxByOrNull { it.length() }!!
-                sb.appendLine("模型：${m.name}（${m.length()} 字节）")
+                step("模型 ${m.name} ${m.length() / 1048576}MB")
                 try { LiteRtEngine.unload() } catch (_: Throwable) {}
-                status.value = "NPU 自检：正在加载模型…"
+
+                step("① 开始 LiteRtEngine.load（NPU 后端）…")
                 val t0 = System.currentTimeMillis()
-                val ok = try {
-                    LiteRtEngine.load(app, m.absolutePath, "NPU", settings.value.threads)
+                var ok = false
+                try {
+                    ok = LiteRtEngine.load(app, m.absolutePath, "NPU", settings.value.threads)
                 } catch (t: Throwable) {
-                    sb.appendLine("load 抛异常：${t.javaClass.simpleName} ${t.message}")
-                    false
+                    step("① load 抛异常 ${t.javaClass.simpleName}: ${t.message}")
                 }
-                sb.appendLine("load 结果=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000} 秒")
+                step("① load 返回=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000}s 内存 $memInfo()")
+
                 if (ok) {
-                    sb.appendLine("当前后端=${LiteRtEngine.currentBackend()}")
-                    status.value = "NPU 自检：正在生成…"
+                    step("② 当前后端=${LiteRtEngine.currentBackend()}")
+                    step("③ 新建会话…")
                     try {
                         LiteRtEngine.newConversation("你是助手，回答简短。", 0.7, 40, 0.95)
-                        val out = LiteRtEngine.generate("说一句话", 120) { }
-                        sb.appendLine("生成成功，输出 ${out.length} 字：${out.take(80)}")
+                        step("③ 会话就绪，内存 $memInfo()")
+                        step("④ 开始生成（最容易崩的一步）…")
+                        val g0 = System.currentTimeMillis()
+                        val out = LiteRtEngine.generate("说一句话", 90) { }
+                        step("④ 生成完成 ${(System.currentTimeMillis() - g0) / 1000}s，输出 ${out.length} 字：${out.take(60)}")
                     } catch (t: Throwable) {
-                        sb.appendLine("生成异常：${t.javaClass.simpleName} ${t.message}")
+                        step("③/④ 异常 ${t.javaClass.simpleName}: ${t.message}")
                     }
                 }
+                step("收尾内存 $memInfo()")
             }
 
-            // 把 adapter 的调用轨迹附在最后 —— 诊断只抓 run_log 末尾
-            sb.appendLine("--- adapter 调用轨迹 ---")
             if (adaLog.exists() && adaLog.length() > 0) {
                 val lines = adaLog.readLines()
-                sb.appendLine("共 ${lines.size} 行，全部输出：")
-                lines.takeLast(60).forEach { sb.appendLine("  $it") }
+                step("adapter 被调用 ${lines.size} 次，轨迹：")
+                lines.takeLast(50).forEach { l ->
+                    try { lf.appendText("    $l\n") } catch (_: Throwable) {}
+                }
             } else {
-                sb.appendLine("❌ 为空：LiteRT 没走到 NPU 路径，或者 adapter 没被 dlopen")
+                step("adapter 调用日志为空 —— LiteRT 没走进 NPU 路径")
             }
-
-            try {
-                java.io.File(app.filesDir, "run_log.txt").appendText("\n" + sb.toString())
-            } catch (_: Throwable) {}
-            status.value = "NPU 自检完成（${sb.length()} 字日志）"
+            step("====== NPU 自检结束 ======")
+            status.value = "NPU 自检结束，导出诊断看日志"
         }
     }
 
