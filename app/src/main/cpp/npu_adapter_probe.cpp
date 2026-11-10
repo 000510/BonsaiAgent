@@ -102,9 +102,10 @@ static bool copyLibToPriv(const char* name, char* outPath, size_t outLen) {
 
 // bionic 核心库绝不能自己复制一份加载：同一进程里出现两个链接器/两套 libc 必崩
 static bool isCoreBionic(const char* n) {
+    // 只排除真正的「进程级唯一」组件：链接器、libc、libm、libdl。
+    // libc++.so 可以加载副本 —— 上次崩溃的元凶是 ld-android.so 的副本，不是它。
     static const char* core[] = {
         "ld-android.so", "libc.so", "libm.so", "libdl.so",
-        "libc++.so", "libc++_shared.so", "libc++abi.so",
     };
     for (const char* c : core) {
         if (strcmp(n, c) == 0) return true;
