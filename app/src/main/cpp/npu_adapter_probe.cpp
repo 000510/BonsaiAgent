@@ -25,6 +25,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <unwind.h>
+#include <dlfcn.h>
 
 #define TAG "NeuronAdapterBridge"
 
@@ -64,6 +66,40 @@ static bool copy_to_priv(const char* name, char* outPath, size_t outLen) {
     fclose(out);
     snprintf(outPath, outLen, "%s", dst);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// 调用栈打印：NeuronModel_free 是 LiteRT 决定放弃的现场，
+// 从返回地址就能看出它是在哪个函数里放弃的（dladdr 给出库名 + 偏移）。
+// ---------------------------------------------------------------------------
+struct BtState { void* pcs[32]; int n; };
+
+static _Unwind_Reason_Code bt_cb(struct _Unwind_Context* ctx, void* arg) {
+    BtState* st = (BtState*) arg;
+    uintptr_t pc = _Unwind_GetIP(ctx);
+    if (pc && st->n < 32) st->pcs[st->n++] = (void*) pc;
+    return _URC_NO_REASON;
+}
+
+static void plog_stack(const char* tag) {
+    BtState st{};
+    _Unwind_Backtrace(bt_cb, &st);
+    char b[420];
+    snprintf(b, sizeof(b), "★ %s 调用栈（%d 帧）：", tag, st.n);
+    plog(b);
+    for (int i = 0; i < st.n && i < 18; i++) {
+        Dl_info info{};
+        if (dladdr(st.pcs[i], &info) && info.dli_fname) {
+            unsigned long off = (unsigned long) ((char*) st.pcs[i] - (char*) info.dli_fbase);
+            const char* nm = (info.dli_sname && info.dli_sname[0]) ? info.dli_sname : "?";
+            snprintf(b, sizeof(b), "    #%02d %s + 0x%lx  (%s)", i,
+                     strrchr(info.dli_fname, '/') ? strrchr(info.dli_fname, '/') + 1 : info.dli_fname,
+                     off, nm);
+        } else {
+            snprintf(b, sizeof(b), "    #%02d %p", i, st.pcs[i]);
+        }
+        plog(b);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +289,14 @@ FWD(NeuronService_getNeuroPilotMagicNumber)
 
 // ---- Model ----
 FWD(NeuronModel_create)
-FWD(NeuronModel_free)
+extern "C" int64_t NeuronModel_free(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                                    uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_free") : nullptr;
+    plog_stack("NeuronModel_free");   // 这就是 LiteRT 放弃编译的现场
+    if (!fn) { plog("缺符号: NeuronModel_free"); return -1; }
+    return fn(a, b, c, d, e, f, g, h);
+}
 FWD(NeuronModel_addOperand)
 FWD(NeuronModel_setOperandValue)
 FWD(NeuronModel_addOperation)
@@ -279,7 +322,18 @@ extern "C" int64_t NeuronModel_finish(uint64_t a, uint64_t b, uint64_t c, uint64
 }
 
 // ---- Compilation ----
-FWD(NeuronCompilation_create)
+extern "C" int64_t NeuronCompilation_create(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                                            uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronCompilation_create") : nullptr;
+    if (!fn) { plog("缺符号: NeuronCompilation_create"); return -1; }
+    int64_t r = fn(a, b, c, d, e, f, g, h);
+    char buf[128];
+    snprintf(buf, sizeof(buf), "★★ NeuronCompilation_create -> %lld", (long long) r);
+    plog(buf);
+    if (r == 0) plog_stack("Compilation_created");
+    return r;
+}
 FWD(NeuronCompilation_createWithOptions)
 extern "C" int64_t NeuronCompilation_finish(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                                            uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
