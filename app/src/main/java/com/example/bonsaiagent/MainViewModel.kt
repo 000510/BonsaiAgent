@@ -299,8 +299,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val bl = java.io.File(
                     getApplication<android.app.Application>().filesDir, "npu_bridge.log")
                 if (bl.exists()) {
-                    sb.appendLine("--- adapter 转发轨迹全文 ---")
-                    sb.appendLine(bl.readText().take(9000))
+                    val all = bl.readLines()
+                    // v10.51：建图统计必须单独提出来，否则会被后面的调用栈挤掉
+                    val stats = all.filter { it.contains("建图结束") }
+                    sb.appendLine("--- 建图统计（关键）---")
+                    if (stats.isEmpty()) sb.appendLine("（本次没有产生统计，说明没走到建图）")
+                    stats.forEach { sb.appendLine(it.take(600)) }
+                    val stacks = all.filter { it.contains("调用栈") || it.trimStart().startsWith("\u0023") }
+                    sb.appendLine("--- 调用栈（前 30 行）---")
+                    stacks.take(30).forEach { sb.appendLine(it) }
                 }
             } catch (_: Throwable) { }
             val iScan = full.lastIndexOf("--- 全系统库目录扫描 ---")
