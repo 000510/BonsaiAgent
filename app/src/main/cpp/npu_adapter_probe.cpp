@@ -100,9 +100,27 @@ static bool copyLibToPriv(const char* name, char* outPath, size_t outLen) {
     return false;
 }
 
+// bionic 核心库绝不能自己复制一份加载：同一进程里出现两个链接器/两套 libc 必崩
+static bool isCoreBionic(const char* n) {
+    static const char* core[] = {
+        "ld-android.so", "libc.so", "libm.so", "libdl.so",
+        "libc++.so", "libc++_shared.so", "libc++abi.so",
+    };
+    for (const char* c : core) {
+        if (strcmp(n, c) == 0) return true;
+    }
+    return false;
+}
+
 static void* loadWithDeps(const char* name, int depth) {
     char buf[420];
     if (depth > 6) return nullptr;
+    if (isCoreBionic(name)) {
+        void* h = dlopen(name, RTLD_NOW | RTLD_GLOBAL);   // 只走系统本身那份
+        snprintf(buf, sizeof(buf), "  %s %s（核心库，只用系统那份）", h ? "✓" : "✗", name);
+        plog(buf);
+        return h;
+    }
     char priv[512];
     if (!copyLibToPriv(name, priv, sizeof(priv))) {
         snprintf(buf, sizeof(buf), "  ✗ %s 在系统里找不到源文件", name);
