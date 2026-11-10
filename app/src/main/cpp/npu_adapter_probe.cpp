@@ -66,28 +66,84 @@ static bool copy_to_priv(const char* name, char* outPath, size_t outLen) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// v10.41 核心：自动补齐依赖链
+//
+// 事实：Android 只允许 App dlopen「NDK 公开」的系统库。
+//   liblog.so   → OK
+//   libutils.so / libcutils.so / libbase.so → not accessible
+// 而 MTK 的编译组件（graph_delegate）恰恰依赖这些内部库。
+//
+// 但私有目录不受这个白名单限制（已验证 libneuron_runtime.7.so 私有副本能加载）。
+// 所以做法：把库连同它缺的依赖一层层复制到私有目录，直到能加载为止。
+// ---------------------------------------------------------------------------
+static bool copyLibToPriv(const char* name, char* outPath, size_t outLen) {
+    const char* dirs[] = {
+        "/system/lib64", "/system_ext/lib64", "/vendor/lib64",
+        "/apex/com.android.runtime/lib64", "/apex/com.android.art/lib64",
+    };
+    for (const char* d : dirs) {
+        char src[512];
+        snprintf(src, sizeof(src), "%s/%s", d, name);
+        FILE* in = fopen(src, "rb");
+        if (!in) continue;
+        snprintf(outPath, outLen, "%s/%s", kPrivDir, name);
+        FILE* o = fopen(outPath, "wb");
+        if (!o) { fclose(in); return false; }
+        char b[65536];
+        size_t k;
+        while ((k = fread(b, 1, sizeof(b), in)) > 0) fwrite(b, 1, k, o);
+        fclose(in);
+        fclose(o);
+        return true;
+    }
+    return false;
+}
+
+static void* loadWithDeps(const char* name, int depth) {
+    char buf[420];
+    if (depth > 6) return nullptr;
+    char priv[512];
+    if (!copyLibToPriv(name, priv, sizeof(priv))) {
+        snprintf(buf, sizeof(buf), "  ✗ %s 在系统里找不到源文件", name);
+        plog(buf);
+        return nullptr;
+    }
+    for (int i = 0; i < 12; i++) {
+        void* h = dlopen(priv, RTLD_NOW | RTLD_GLOBAL);
+        if (h) {
+            snprintf(buf, sizeof(buf), "  ✓ %s 已加载", name);
+            plog(buf);
+            return h;
+        }
+        const char* e = dlerror();
+        const char* q1 = strstr(e, "library \"");
+        const char* q2 = q1 ? strstr(q1 + 9, "\" not found") : nullptr;
+        if (!q1 || !q2 || (q2 - (q1 + 9)) > 120) {
+            snprintf(buf, sizeof(buf), "  ✗ %s 加载失败: %s", name, e);
+            plog(buf);
+            return nullptr;
+        }
+        char miss[128];
+        size_t len = (size_t)(q2 - (q1 + 9));
+        memcpy(miss, q1 + 9, len);
+        miss[len] = 0;
+        snprintf(buf, sizeof(buf), "  ↓ %s 缺 %s，递归补", name, miss);
+        plog(buf);
+        if (!loadWithDeps(miss, depth + 1)) return nullptr;
+    }
+    return nullptr;
+}
+
 __attribute__((constructor)) static void bridge_init() {
     mkdir(kPrivDir, 0700);
     char buf[512];
 
-    // v10.40：先做个基础实验 —— app 的 namespace 到底能不能直连 /system/lib64
-    {
-        const char* probe[] = {
-            "/system/lib64/libutils.so", "/system/lib64/libcutils.so",
-            "/system/lib64/libbase.so",  "/system/lib64/liblog.so",
-        };
-        for (const char* p : probe) {
-            struct stat st{};
-            bool ok = (stat(p, &st) == 0);
-            void* h = ok ? dlopen(p, RTLD_NOW | RTLD_GLOBAL) : nullptr;
-            snprintf(buf, sizeof(buf), "直连测试 %s : %s%s", p,
-                     ok ? "" : "[文件不存在] ", h ? "OK" : dlerror());
-            plog(buf);
-        }
-    }
+    // 先把 MTK 编译组件连同依赖链准备好（能成就成，不成也不影响后面加载 adapter）
+    loadWithDeps("libneuron_graph_delegate.mtk.so", 0);
+    loadWithDeps("libneuron_platform.so", 0);
+    loadWithDeps("libneuron_sys_util.mtk.so", 0);
 
-    // 不再自己预加载依赖 —— 上一版把 graph_delegate/platform 往私有目录搬，
-    // 结果 adapter 反而在建图后放弃编译。先让 adapter 自己解决依赖。
     const char* paths[] = {
         "/system_ext/lib64/libneuronusdk_adapter.9.mtk.so",
         "/system_ext/lib64/libneuronusdk_adapter.mtk.so",
