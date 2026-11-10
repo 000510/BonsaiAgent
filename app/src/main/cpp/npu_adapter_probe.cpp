@@ -228,12 +228,42 @@ __attribute__((constructor)) static void bridge_init() {
         if (g_real) {
             snprintf(buf, sizeof(buf), "★ 真实 adapter 已加载: %s", p);
             plog(buf);
-            return;
+            break;
         }
         snprintf(buf, sizeof(buf), "  失败 %s : %s", p, dlerror());
         plog(buf);
     }
-    plog("❌ 所有路径均加载失败");
+    if (!g_real) plog("❌ 所有路径均加载失败");
+
+    // ---- v10.47 自检 ----
+    // 疑问：LiteRT 建完图（identifyIO 成功）却直接 free，说明它认为
+    //       model_finish 不可用。这里直接确认我们的转发层到底导出了没有，
+    //       以及真 adapter 里到底有哪些关键符号。
+    {
+        const char* mine[] = {
+            "NeuronModel_finish", "NeuronCompilation_create",
+            "NeuronCompilation_finish", "NeuronModel_restoreFromCompiledNetwork",
+            "NeuronModel_restoreFromCompiledNetworkV3",
+        };
+        for (const char* n : mine) {
+            void* q = dlsym(RTLD_DEFAULT, n);
+            snprintf(buf, sizeof(buf), "自检·我方导出 %s -> %s", n, q ? "有" : "缺失");
+            plog(buf);
+        }
+    }
+    if (g_real) {
+        const char* theirs[] = {
+            "NeuronModel_finish", "NeuronCompilation_create",
+            "NeuronCompilation_createForDevices", "NeuronCompilation_createWithOptions",
+            "NeuronCompilation_finish", "NeuronModel_restoreFromCompiledNetwork",
+            "NeuronModel_restoreFromCompiledNetworkV3", "NeuronExecution_compute",
+        };
+        for (const char* n : theirs) {
+            void* q = dlsym(g_real, n);
+            snprintf(buf, sizeof(buf), "自检·真adapter %s -> %s", n, q ? "有" : "缺失");
+            plog(buf);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
