@@ -41,6 +41,7 @@ static void plog(const char* s) {
 }
 
 #include <sys/stat.h>
+#include <unistd.h>
 
 static const char* kPrivDir = "/data/data/com.example.bonsailite/files/npulibs";
 
@@ -48,6 +49,9 @@ static const char* kPrivDir = "/data/data/com.example.bonsailite/files/npulibs";
 static bool copy_to_priv(const char* name, char* outPath, size_t outLen) {
     char src[512], dst[512];
     snprintf(src, sizeof(src), "/system_ext/lib64/%s", name);
+    if (access(src, R_OK) != 0) {
+        snprintf(src, sizeof(src), "/vendor/lib64/%s", name);
+    }
     snprintf(dst, sizeof(dst), "%s/%s", kPrivDir, name);
     FILE* in = fopen(src, "rb");
     if (!in) return false;
@@ -77,6 +81,29 @@ __attribute__((constructor)) static void bridge_init() {
         }
     }
 
+    // ①.5 graph_delegate 缺 libutils.so，先把系统那份复制进私有目录（私有目录可被依赖解析）
+    {
+        char src[512], dst[512];
+        snprintf(src, sizeof(src), "/system/lib64/libutils.so");
+        snprintf(dst, sizeof(dst), "%s/libutils.so", kPrivDir);
+        FILE* in = fopen(src, "rb");
+        if (in) {
+            FILE* out = fopen(dst, "wb");
+            if (out) {
+                char b2[64 * 1024];
+                size_t n;
+                while ((n = fread(b2, 1, sizeof(b2), in)) > 0) fwrite(b2, 1, n, out);
+                fclose(out);
+            }
+            fclose(in);
+            void* h = dlopen(dst, RTLD_NOW | RTLD_GLOBAL);
+            snprintf(buf, sizeof(buf), "复制+预载 libutils.so -> %s", h ? "OK" : dlerror());
+            plog(buf);
+        } else {
+            plog("libutils.so 复制失败（读不到 /system/lib64/libutils.so）");
+        }
+    }
+
     // ② 被 namespace 拦的，先复制到私有目录再加载。
     //    关键：加载同名 SONAME 后，后续任何对裸库名的 dlopen 都会命中已加载的这份，
     //    不会再回 /system_ext 去撞 namespace。
@@ -84,6 +111,7 @@ __attribute__((constructor)) static void bridge_init() {
         const char* needed[] = {
             "libneuron_graph_delegate.mtk.so",
             "libnir_neon_driver_ndk.mtk.so",
+            "libneuron_platform.so",
         };
         for (const char* name : needed) {
             char priv[512];

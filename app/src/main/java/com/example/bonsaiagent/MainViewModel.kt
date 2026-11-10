@@ -294,6 +294,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         try {
             val full = java.io.File(
                 getApplication<android.app.Application>().filesDir, "run_log.txt").readText()
+            // v10.38：bridge 轨迹只有全量才看得出卡在哪个函数
+            try {
+                val bl = java.io.File(
+                    getApplication<android.app.Application>().filesDir, "npu_bridge.log")
+                if (bl.exists()) {
+                    sb.appendLine("--- adapter 转发轨迹全文 ---")
+                    sb.appendLine(bl.readText().take(9000))
+                }
+            } catch (_: Throwable) { }
             val iScan = full.lastIndexOf("--- 全系统库目录扫描 ---")
             if (iScan >= 0) {
                 sb.appendLine("--- NPU 扫描全文 ---")
