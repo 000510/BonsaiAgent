@@ -40,18 +40,66 @@ static void plog(const char* s) {
     }
 }
 
+#include <sys/stat.h>
+
+static const char* kPrivDir = "/data/data/com.example.bonsailite/files/npulibs";
+
+// 把系统库复制到私有目录 —— 私有目录不受 namespace "clns-9" 限制（已验证）
+static bool copy_to_priv(const char* name, char* outPath, size_t outLen) {
+    char src[512], dst[512];
+    snprintf(src, sizeof(src), "/system_ext/lib64/%s", name);
+    snprintf(dst, sizeof(dst), "%s/%s", kPrivDir, name);
+    FILE* in = fopen(src, "rb");
+    if (!in) return false;
+    FILE* out = fopen(dst, "wb");
+    if (!out) { fclose(in); return false; }
+    char buf[64 * 1024];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
+    fclose(in);
+    fclose(out);
+    snprintf(outPath, outLen, "%s", dst);
+    return true;
+}
+
 __attribute__((constructor)) static void bridge_init() {
+    mkdir(kPrivDir, 0700);
     // 先把辅助库以 RTLD_GLOBAL 拉进来，真 adapter 可能按裸名依赖它们
-    const char* pre[] = {
-        "/system_ext/lib64/libneuron_sys_util.mtk.so",
-        "/system_ext/lib64/libneuron_graph_delegate.mtk.so",
-        "/system_ext/lib64/libnir_neon_driver_ndk.mtk.so",
-    };
     char buf[512];
-    for (const char* p : pre) {
-        void* h = dlopen(p, RTLD_NOW | RTLD_GLOBAL);
-        snprintf(buf, sizeof(buf), "预载 %s -> %s", p, h ? "OK" : dlerror());
-        plog(buf);
+
+    // ① 能直接从 /system_ext 加载的，直接加载
+    {
+        const char* ok[] = {"/system_ext/lib64/libneuron_sys_util.mtk.so"};
+        for (const char* p : ok) {
+            void* h = dlopen(p, RTLD_NOW | RTLD_GLOBAL);
+            snprintf(buf, sizeof(buf), "预载 %s -> %s", p, h ? "OK" : dlerror());
+            plog(buf);
+        }
+    }
+
+    // ② 被 namespace 拦的，先复制到私有目录再加载。
+    //    关键：加载同名 SONAME 后，后续任何对裸库名的 dlopen 都会命中已加载的这份，
+    //    不会再回 /system_ext 去撞 namespace。
+    {
+        const char* needed[] = {
+            "libneuron_graph_delegate.mtk.so",
+            "libnir_neon_driver_ndk.mtk.so",
+        };
+        for (const char* name : needed) {
+            char priv[512];
+            if (!copy_to_priv(name, priv, sizeof(priv))) {
+                snprintf(buf, sizeof(buf), "  复制失败 %s（系统里没有或读不到）", name);
+                plog(buf);
+                continue;
+            }
+            void* h = dlopen(priv, RTLD_NOW | RTLD_GLOBAL);
+            snprintf(buf, sizeof(buf), "复制+预载 %s -> %s", name, h ? priv : dlerror());
+            plog(buf);
+            // 再试一次裸名，看是否命中已有 SONAME
+            void* h2 = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+            snprintf(buf, sizeof(buf), "   裸名复测 %s -> %s", name, h2 ? "OK" : "仍失败");
+            plog(buf);
+        }
     }
 
     const char* paths[] = {
@@ -91,7 +139,15 @@ using Fn8 = int64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
             if (!fn) plog("缺符号: " #name);                                    \
         }                                                                      \
         if (!fn) return -1;                                                    \
-        return fn(a, b, c, d, e, f, g, h);                                     \
+        int64_t r = fn(a, b, c, d, e, f, g, h);                                \
+        static int cnt = 0;                                                    \
+        if (cnt < 400) {                                                       \
+            cnt++;                                                             \
+            char b[160];                                                       \
+            snprintf(b, sizeof(b), "%s -> %lld", #name, (long long) r);        \
+            plog(b);                                                           \
+        }                                                                      \
+        return r;                                                              \
     }
 
 extern "C" {

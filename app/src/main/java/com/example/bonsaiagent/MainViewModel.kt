@@ -710,7 +710,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (adaLog.exists() && adaLog.length() > 0) {
                 val lines = adaLog.readLines()
                 step("adapter 被调用 ${lines.size} 次，轨迹：")
-                lines.takeLast(50).forEach { l ->
+                lines.takeLast(200).forEach { l ->
                     try { lf.appendText("    $l\n") } catch (_: Throwable) {}
                 }
             } else {
