@@ -327,11 +327,35 @@ extern "C" int64_t NeuronModel_free(uint64_t a, uint64_t b, uint64_t c, uint64_t
     if (!fn) { plog("缺符号: NeuronModel_free"); return -1; }
     return fn(a, b, c, d, e, f, g, h);
 }
-FWD(NeuronModel_addOperand)
+extern "C" int64_t NeuronModel_addOperand(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                            uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    static bool first = true;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_addOperand") : nullptr;
+    if (!fn) { plog("缺符号: NeuronModel_addOperand"); return -1; }
+    if (first) { first = false; plog_stack("NeuronModel_addOperand 首次调用"); }
+    return fn(a, b, c, d, e, f, g, h);
+}
 FWD(NeuronModel_setOperandValue)
 FWD(NeuronModel_addOperation)
-FWD(NeuronModel_identifyInputsAndOutputs)
-FWD(NeuronModel_setName)
+extern "C" int64_t NeuronModel_identifyInputsAndOutputs(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                            uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    static bool first = true;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_identifyInputsAndOutputs") : nullptr;
+    if (!fn) { plog("缺符号: NeuronModel_identifyInputsAndOutputs"); return -1; }
+    if (first) { first = false; plog_stack("NeuronModel_identifyInputsAndOutputs 首次调用"); }
+    return fn(a, b, c, d, e, f, g, h);
+}
+extern "C" int64_t NeuronModel_setName(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                            uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    static bool first = true;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_setName") : nullptr;
+    if (!fn) { plog("缺符号: NeuronModel_setName"); return -1; }
+    if (first) { first = false; plog_stack("NeuronModel_setName 首次调用"); }
+    return fn(a, b, c, d, e, f, g, h);
+}
 FWD(NeuronModel_getExtensionOperandType)
 FWD(NeuronModel_getExtensionOperationType)
 FWD(NeuronModel_setOperandSymmPerChannelQuantParams)
