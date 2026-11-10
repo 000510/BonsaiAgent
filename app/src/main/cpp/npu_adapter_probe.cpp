@@ -68,76 +68,31 @@ static bool copy_to_priv(const char* name, char* outPath, size_t outLen) {
 
 __attribute__((constructor)) static void bridge_init() {
     mkdir(kPrivDir, 0700);
-    // 先把辅助库以 RTLD_GLOBAL 拉进来，真 adapter 可能按裸名依赖它们
     char buf[512];
 
-    // ① 能直接从 /system_ext 加载的，直接加载
+    // v10.40：先做个基础实验 —— app 的 namespace 到底能不能直连 /system/lib64
     {
-        const char* ok[] = {"/system_ext/lib64/libneuron_sys_util.mtk.so"};
-        for (const char* p : ok) {
-            void* h = dlopen(p, RTLD_NOW | RTLD_GLOBAL);
-            snprintf(buf, sizeof(buf), "预载 %s -> %s", p, h ? "OK" : dlerror());
-            plog(buf);
-        }
-    }
-
-    // ①.5 graph_delegate 缺 libutils.so，先把系统那份复制进私有目录（私有目录可被依赖解析）
-    {
-        char src[512], dst[512];
-        snprintf(src, sizeof(src), "/system/lib64/libutils.so");
-        snprintf(dst, sizeof(dst), "%s/libutils.so", kPrivDir);
-        FILE* in = fopen(src, "rb");
-        if (in) {
-            FILE* out = fopen(dst, "wb");
-            if (out) {
-                char b2[64 * 1024];
-                size_t n;
-                while ((n = fread(b2, 1, sizeof(b2), in)) > 0) fwrite(b2, 1, n, out);
-                fclose(out);
-            }
-            fclose(in);
-            void* h = dlopen(dst, RTLD_NOW | RTLD_GLOBAL);
-            snprintf(buf, sizeof(buf), "复制+预载 libutils.so -> %s", h ? "OK" : dlerror());
-            plog(buf);
-        } else {
-            plog("libutils.so 复制失败（读不到 /system/lib64/libutils.so）");
-        }
-    }
-
-    // ② 被 namespace 拦的，先复制到私有目录再加载。
-    //    关键：加载同名 SONAME 后，后续任何对裸库名的 dlopen 都会命中已加载的这份，
-    //    不会再回 /system_ext 去撞 namespace。
-    {
-        const char* needed[] = {
-            "libneuron_graph_delegate.mtk.so",
-            "libnir_neon_driver_ndk.mtk.so",
-            "libneuron_platform.so",
+        const char* probe[] = {
+            "/system/lib64/libutils.so", "/system/lib64/libcutils.so",
+            "/system/lib64/libbase.so",  "/system/lib64/liblog.so",
         };
-        for (const char* name : needed) {
-            char priv[512];
-            if (!copy_to_priv(name, priv, sizeof(priv))) {
-                snprintf(buf, sizeof(buf), "  复制失败 %s（系统里没有或读不到）", name);
-                plog(buf);
-                continue;
-            }
-            void* h = dlopen(priv, RTLD_NOW | RTLD_GLOBAL);
-            snprintf(buf, sizeof(buf), "复制+预载 %s -> %s", name, h ? priv : dlerror());
-            plog(buf);
-            // 再试一次裸名，看是否命中已有 SONAME
-            void* h2 = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
-            snprintf(buf, sizeof(buf), "   裸名复测 %s -> %s", name, h2 ? "OK" : "仍失败");
+        for (const char* p : probe) {
+            struct stat st{};
+            bool ok = (stat(p, &st) == 0);
+            void* h = ok ? dlopen(p, RTLD_NOW | RTLD_GLOBAL) : nullptr;
+            snprintf(buf, sizeof(buf), "直连测试 %s : %s%s", p,
+                     ok ? "" : "[文件不存在] ", h ? "OK" : dlerror());
             plog(buf);
         }
     }
 
-    // v10.39：先试 .9.mtk.so —— 模型里的 bytecode 可能是 Neuron 9 编译的，
-    // 而 LiteRT 要求 bytecode 的 major 版本必须等于 adapter 的版本，否则直接失败。
+    // 不再自己预加载依赖 —— 上一版把 graph_delegate/platform 往私有目录搬，
+    // 结果 adapter 反而在建图后放弃编译。先让 adapter 自己解决依赖。
     const char* paths[] = {
         "/system_ext/lib64/libneuronusdk_adapter.9.mtk.so",
         "/system_ext/lib64/libneuronusdk_adapter.mtk.so",
         "/system_ext/lib64/libneuronservice_adapter.mtk.so",
         "/system_ext/lib64/libneuron_adapter.so",
-        "/system_ext/lib64/libneuron_adapter_mgvi.so",
     };
     for (const char* p : paths) {
         g_real = dlopen(p, RTLD_NOW | RTLD_GLOBAL);
@@ -149,7 +104,7 @@ __attribute__((constructor)) static void bridge_init() {
         snprintf(buf, sizeof(buf), "  失败 %s : %s", p, dlerror());
         plog(buf);
     }
-    plog("❌ 所有路径均加载失败，转发层将全部返回错误");
+    plog("❌ 所有路径均加载失败");
 }
 
 // ---------------------------------------------------------------------------
@@ -218,12 +173,32 @@ FWD(NeuronModel_setOperandPerChannelQuantParams)
 FWD(NeuronModel_relaxComputationFloat32toFloat16)
 FWD(NeuronModel_restoreFromCompiledNetwork)
 FWD(NeuronModel_restoreFromCompiledNetworkV3)
-FWD(NeuronModel_finish)
+extern "C" int64_t NeuronModel_finish(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                                     uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_finish") : nullptr;
+    if (!fn) { plog("缺符号: NeuronModel_finish"); return -1; }
+    int64_t r = fn(a, b, c, d, e, f, g, h);
+    char buf[128];
+    snprintf(buf, sizeof(buf), "★ NeuronModel_finish -> %lld", (long long) r);
+    plog(buf);
+    return r;
+}
 
 // ---- Compilation ----
 FWD(NeuronCompilation_create)
 FWD(NeuronCompilation_createWithOptions)
-FWD(NeuronCompilation_finish)
+extern "C" int64_t NeuronCompilation_finish(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                                           uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronCompilation_finish") : nullptr;
+    if (!fn) { plog("缺符号: NeuronCompilation_finish"); return -1; }
+    int64_t r = fn(a, b, c, d, e, f, g, h);
+    char buf[128];
+    snprintf(buf, sizeof(buf), "★ NeuronCompilation_finish -> %lld", (long long) r);
+    plog(buf);
+    return r;
+}
 FWD(NeuronCompilation_free)
 FWD(NeuronCompilation_getCompiledNetworkSize)
 FWD(NeuronCompilation_storeCompiledNetwork)
