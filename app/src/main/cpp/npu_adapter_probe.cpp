@@ -33,6 +33,30 @@
 static const char* kLogPath = "/data/data/com.example.bonsailite/files/npu_bridge.log";
 static void* g_real = nullptr;
 
+// v10.50：建图期间的类型统计，在 NeuronModel_free 时统一打印
+static int g_operandHist[512];
+static int g_operandTotal = 0;
+static int g_opTypes[512];
+static int g_opCount = 0;
+static void dump_model_stats(const char* why) {
+    char line[700];
+    int pos = 0;
+    pos += snprintf(line + pos, sizeof(line) - pos, "%s operand×%d 类型:", why, g_operandTotal);
+    for (int k = 0; k < 512 && pos < (int) sizeof(line) - 24; k++) {
+        if (g_operandHist[k]) pos += snprintf(line + pos, sizeof(line) - pos, " %d×%d", k, g_operandHist[k]);
+    }
+    plog(line);
+    pos = 0;
+    pos += snprintf(line + pos, sizeof(line) - pos, "%s operation×%d 类型:", why, g_opCount);
+    for (int k = 0; k < g_opCount && k < 512 && pos < (int) sizeof(line) - 12; k++) {
+        pos += snprintf(line + pos, sizeof(line) - pos, " %d", g_opTypes[k]);
+    }
+    plog(line);
+    memset(g_operandHist, 0, sizeof(g_operandHist));
+    g_operandTotal = 0;
+    g_opCount = 0;
+}
+
 static void plog(const char* s) {
     __android_log_print(ANDROID_LOG_INFO, TAG, "%s", s);
     FILE* f = fopen(kLogPath, "a");
@@ -323,6 +347,7 @@ extern "C" int64_t NeuronModel_free(uint64_t a, uint64_t b, uint64_t c, uint64_t
                                     uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
     static Fn8 fn = nullptr;
     if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_free") : nullptr;
+    dump_model_stats("建图结束");
     plog_stack("NeuronModel_free");   // 这就是 LiteRT 放弃编译的现场
     if (!fn) { plog("缺符号: NeuronModel_free"); return -1; }
     return fn(a, b, c, d, e, f, g, h);
@@ -339,28 +364,22 @@ extern "C" int64_t NeuronModel_addOperand(uint64_t a, uint64_t b, uint64_t c, ui
     if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_addOperand") : nullptr;
     if (!fn) { plog("缺符号: NeuronModel_addOperand"); return -1; }
     if (first) { first = false; plog_stack("NeuronModel_addOperand 首次调用"); }
-    {
-        static int hist[512] = {0};
-        static int total = 0;
-        if (b && total < 400) {
-            int32_t t = *(int32_t*) b;
-            if (t >= 0 && t < 512) hist[t]++;
-            total++;
-            if (total == 200) {
-                char line[400];
-                int pos = 0;
-                pos += snprintf(line + pos, sizeof(line) - pos, "operand 类型分布（前200个）:");
-                for (int k = 0; k < 512; k++) {
-                    if (hist[k]) pos += snprintf(line + pos, sizeof(line) - pos, " %d×%d", k, hist[k]);
-                }
-                plog(line);
-            }
-        }
+    if (b && g_operandTotal < 4000) {
+        int32_t t = *(int32_t*) b;
+        if (t >= 0 && t < 512) g_operandHist[t]++;
+        g_operandTotal++;
     }
     return fn(a, b, c, d, e, f, g, h);
 }
 FWD(NeuronModel_setOperandValue)
-FWD(NeuronModel_addOperation)
+extern "C" int64_t NeuronModel_addOperation(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                                           uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_addOperation") : nullptr;
+    if (!fn) { plog("缺符号: NeuronModel_addOperation"); return -1; }
+    if (g_opCount < 512) g_opTypes[g_opCount++] = (int) (int32_t) b;   // b = 操作码
+    return fn(a, b, c, d, e, f, g, h);
+}
 extern "C" int64_t NeuronModel_identifyInputsAndOutputs(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                             uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
     static Fn8 fn = nullptr;
