@@ -329,11 +329,34 @@ extern "C" int64_t NeuronModel_free(uint64_t a, uint64_t b, uint64_t c, uint64_t
 }
 extern "C" int64_t NeuronModel_addOperand(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                             uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    // v10.49：把 operand 的类型码统计出来。
+    // NeuronOperandType 第一个字段就是 int32 type：
+    //   3=TENSOR_FLOAT32 5=QUANT8_ASYMM 7=QUANT8_SYMM 17=QUANT8_PER_CHANNEL
+    //   100+=扩展类型（QUANT4/QUANT2 等）
+    // 官方文档明说 blockwise 量化不支持，这里看实际用的是什么。
     static Fn8 fn = nullptr;
     static bool first = true;
     if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_addOperand") : nullptr;
     if (!fn) { plog("缺符号: NeuronModel_addOperand"); return -1; }
     if (first) { first = false; plog_stack("NeuronModel_addOperand 首次调用"); }
+    {
+        static int hist[512] = {0};
+        static int total = 0;
+        if (b && total < 400) {
+            int32_t t = *(int32_t*) b;
+            if (t >= 0 && t < 512) hist[t]++;
+            total++;
+            if (total == 200) {
+                char line[400];
+                int pos = 0;
+                pos += snprintf(line + pos, sizeof(line) - pos, "operand 类型分布（前200个）:");
+                for (int k = 0; k < 512; k++) {
+                    if (hist[k]) pos += snprintf(line + pos, sizeof(line) - pos, " %d×%d", k, hist[k]);
+                }
+                plog(line);
+            }
+        }
+    }
     return fn(a, b, c, d, e, f, g, h);
 }
 FWD(NeuronModel_setOperandValue)
