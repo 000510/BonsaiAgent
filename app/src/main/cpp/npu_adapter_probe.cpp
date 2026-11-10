@@ -33,6 +33,8 @@
 static const char* kLogPath = "/data/data/com.example.bonsailite/files/npu_bridge.log";
 static void* g_real = nullptr;
 
+static void plog(const char* s);   // 前置声明：统计函数定义在 plog 之前
+
 // v10.50：建图期间的类型统计，在 NeuronModel_free 时统一打印
 static int g_operandHist[512];
 static int g_operandTotal = 0;
