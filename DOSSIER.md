@@ -191,6 +191,38 @@ NeuronModel_setOperandValue(idx=149 len=16)
 
 我们有的（runtime）来自设备，缺的（adapter/编译器）在 Basic 级。
 
+#### 最终结论（2026-11-10，v10.45 后封档）
+
+**这台机器上，第三方 App 拿不到 NPU 的编译能力。不是代码问题。**
+
+完整验证链（每步都有日志）：
+
+| 环节 | 结果 |
+|---|---|
+| `/system_ext/lib64` 里的 MTK 库 | ✅ 找到 7 个（之前只扫 /vendor 漏了） |
+| 自造 `libneuron_adapter.so` 占住第一顺位 | ✅ LiteRT 真的用了，调用 190+ 次 |
+| 转发层用绝对路径加载真 adapter | ✅ `libneuronusdk_adapter.9.mtk.so`（版本 9.0.11）加载成功 |
+| adapter 的报告版本 | ✅ `Neuron_getVersion` → 9.0.11 |
+| 建图（addOperand/addOperation/identifyIO） | ✅ 166 个张量、8 个算子全返回 0 |
+| **`NeuronModel_finish` / `NeuronCompilation_*`** | ❌ **一次都没被调用** |
+| 自动补齐 19 个依赖库 | ✅ 全成功 |
+| `libutils` / `libcutils` / `libbase` 直连 | ❌ `not accessible for namespace` |
+
+**死结点**：
+
+```
+编译需要 libneuron_graph_delegate.mtk.so
+  它依赖 libutils.so（Android 系统内部库）
+    → Android 规定：App 只能加载 NDK 公开库（liblog 可以，libutils 不行）
+    → 复制到私有目录绕过白名单，又撞上链接器 ld-android 的链式死锁（会 SIGSEGV）
+```
+
+**这是 Android 的安全模型 + MTK 的依赖结构共同造成的，改代码解决不了。**
+
+HAL 代理版 `libneuronservice_adapter.mtk.so`（250 KB，理论上可由 vendor 服务进程代劳）**dlopen 直接失败**，是最后一条路的尽头。
+
+**副作用记录**：`ld-android.so` 的私有副本会导致进程崩溃（同一进程两个链接器）。这条教训写进第五节。
+
 #### 如果以后还要继续，需要什么
 
 **路径 A：设备端 JIT —— 需要真正的 `libneuron_adapter.so`（约 200 KB）**
@@ -249,4 +281,6 @@ CI：GitHub Actions，push 到 main 自动编译并发布到 Release。
 4. **社区数据要核对设备和量化格式** —— Mali 的 Vulkan 数据在 Q8_0 和 Q4 上结论完全相反
 5. **"厂商支持"≠"你能用"** —— MT6989 在 LiteRT 官方支持列表里，但设备上的入口库被 OEM 裁掉了。支持列表只说明"理论上可以"，要看系统里实际剩什么
 6. **排障日志必须逐步落盘** —— 攒到最后一次性写，一崩溃就全丢，等于睁眼瞎（v10.31→v10.32 的教训）
-7. **工程结论要给证据，不要给推测** —— 这轮能收尾，靠的是 readelf/strings/dynsym 这些硬证据，不是"我猜它缺编译器"
+7. **同一进程绝不能加载第二份 `ld-android.so`**（链接器本体）—— 必 SIGSEGV。排查依赖链时要把链接器/libc/libm/libdl 排除
+8. **Android 只允许 App dlopen NDK 公开库** —— `liblog.so` 能，`libutils/libcutils/libbase` 不能。这是白名单，不是权限
+9. **工程结论要给证据，不要给推测** —— 这轮能收尾，靠的是 readelf/strings/dynsym 这些硬证据，不是"我猜它缺编译器"
