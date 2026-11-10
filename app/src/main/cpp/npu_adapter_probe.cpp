@@ -130,9 +130,11 @@ __attribute__((constructor)) static void bridge_init() {
         }
     }
 
+    // v10.39：先试 .9.mtk.so —— 模型里的 bytecode 可能是 Neuron 9 编译的，
+    // 而 LiteRT 要求 bytecode 的 major 版本必须等于 adapter 的版本，否则直接失败。
     const char* paths[] = {
-        "/system_ext/lib64/libneuronusdk_adapter.mtk.so",
         "/system_ext/lib64/libneuronusdk_adapter.9.mtk.so",
+        "/system_ext/lib64/libneuronusdk_adapter.mtk.so",
         "/system_ext/lib64/libneuronservice_adapter.mtk.so",
         "/system_ext/lib64/libneuron_adapter.so",
         "/system_ext/lib64/libneuron_adapter_mgvi.so",
@@ -181,7 +183,23 @@ using Fn8 = int64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
 extern "C" {
 
 // ---- 版本 / 平台 ----
-FWD(Neuron_getVersion)
+// 单独实现：必须把 adapter 填进结构体的真实版本号记录下来，
+// LiteRT 会拿它和 bytecode 的 major 版本比对，不一致就直接放弃。
+extern "C" int64_t Neuron_getVersion(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                                     uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "Neuron_getVersion") : nullptr;
+    if (!fn) { plog("缺符号: Neuron_getVersion"); return -1; }
+    int64_t r = fn(a, b, c, d, e, f, g, h);
+    if (a) {
+        const unsigned char* v = (const unsigned char*) a;
+        char buf[128];
+        snprintf(buf, sizeof(buf), "Neuron_getVersion -> ret=%lld, 版本=%u.%u.%u",
+                 (long long) r, v[0], v[1], v[2]);
+        plog(buf);
+    }
+    return r;
+}
 FWD(Neuron_getL1MemorySizeKb)
 FWD(NeuronService_getNeuroPilotMagicNumber)
 
