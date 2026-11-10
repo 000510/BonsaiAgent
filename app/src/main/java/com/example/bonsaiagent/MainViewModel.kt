@@ -586,7 +586,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 else "自造 adapter：❌ 不在 APK 内"
             )
             val adaLog = java.io.File(
-                getApplication<android.app.Application>().filesDir, "npu_adapter.log")
+                getApplication<android.app.Application>().filesDir, "npu_bridge.log")
             if (adaLog.exists()) {
                 sb.appendLine("adapter 调用日志：${adaLog.length()} 字节，最后 20 行：")
                 try {
@@ -641,7 +641,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             fun inApk(n: String) = try {
                 java.io.File(libDir).listFiles()?.firstOrNull { it.name == n }?.length()
             } catch (_: Throwable) { null }
-            step("dispatch=${inApk("libLiteRtDispatch_MediaTek.so")}B, 自造adapter(已改名不再顶替)=${inApk("libneuron_probe_fake.so")}B")
+            step("dispatch=${inApk("libLiteRtDispatch_MediaTek.so")}B, 转发层adapter=${inApk("libneuron_adapter.so")}B")
             step("起始内存 ${memInfo()}")
 
             // v10.33：扫遍所有可能的系统库目录 —— 之前只扫了 /vendor/lib64，
@@ -668,7 +668,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             step("--- 扫描结束 ---")
 
-            val adaLog = java.io.File(app.filesDir, "npu_adapter.log")
+            val adaLog = java.io.File(app.filesDir, "npu_bridge.log")
             try { if (adaLog.exists()) adaLog.delete() } catch (_: Throwable) {}
 
             val models = java.io.File(app.filesDir, "models").listFiles()

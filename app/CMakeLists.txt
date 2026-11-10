@@ -155,5 +155,5 @@ target_link_options(bonsai_llm PRIVATE
 # 且路径是 <nativeLibraryDir>/libneuron_adapter.so，正好是 APK 打到 lib/arm64-v8a 的位置。
 # ---------------------------------------------------------------------------
 add_library(neuron_adapter SHARED ${CMAKE_SOURCE_DIR}/src/main/cpp/npu_adapter_probe.cpp)
-set_target_properties(neuron_adapter PROPERTIES OUTPUT_NAME "neuron_probe_fake")
+set_target_properties(neuron_adapter PROPERTIES OUTPUT_NAME "neuron_adapter")
 target_link_libraries(neuron_adapter ${log-lib} dl)
