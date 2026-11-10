@@ -289,6 +289,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sb.appendLine("--- 日志末尾 ---")
             sb.appendLine(log)
         }
+        // v10.35：run_log 只截末尾 40 行太短，NPU 扫描结果会被挤掉。
+        // 从"全系统库目录扫描"那句开始，把后面整段原样带出来。
+        try {
+            val full = java.io.File(
+                getApplication<android.app.Application>().filesDir, "run_log.txt").readText()
+            val iScan = full.lastIndexOf("--- 全系统库目录扫描 ---")
+            if (iScan >= 0) {
+                sb.appendLine("--- NPU 扫描全文 ---")
+                sb.appendLine(full.substring(iScan).take(4000))
+            }
+        } catch (_: Throwable) { }
+
         val err = readFileTail("native_stderr.txt", 15)
         if (err.isNotBlank()) {
             sb.appendLine("--- 底层输出末尾 ---")
