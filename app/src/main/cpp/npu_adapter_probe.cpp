@@ -117,10 +117,25 @@ static void* loadWithDeps(const char* name, int depth) {
     char buf[420];
     if (depth > 6) return nullptr;
     if (isCoreBionic(name)) {
-        void* h = dlopen(name, RTLD_NOW | RTLD_GLOBAL);   // 只走系统本身那份
-        snprintf(buf, sizeof(buf), "  %s %s（核心库，只用系统那份）", h ? "✓" : "✗", name);
+        // 链接器 / libc / libm / libdl 本来就在进程里，
+        // 私有一份副本会造成两套运行时，必崩。
+        // 这里只尝试按名字拿系统那份；拿不到也返回非空句柄，
+        // 因为它们确实已加载，只是没有常规 dlopen 句柄。
+        void* h = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+        snprintf(buf, sizeof(buf), "  %s %s（核心库，已在进程内）", h ? "✓" : "≈", name);
         plog(buf);
-        return h;
+        return h ? h : (void*) 1;
+    }
+
+    // v10.44：先试系统裸名 —— libdl_android / libvndksupport 这类
+    // 走系统 namespace 往往就能拿到，没必要复制副本。
+    {
+        void* h = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+        if (h) {
+            snprintf(buf, sizeof(buf), "  ✓ %s（系统自带）", name);
+            plog(buf);
+            return h;
+        }
     }
     char priv[512];
     if (!copyLibToPriv(name, priv, sizeof(priv))) {
