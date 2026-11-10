@@ -122,8 +122,12 @@ static void* loadWithDeps(const char* name, int depth) {
         // 这里只尝试按名字拿系统那份；拿不到也返回非空句柄，
         // 因为它们确实已加载，只是没有常规 dlopen 句柄。
         void* h = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
-        snprintf(buf, sizeof(buf), "  %s %s（核心库，已在进程内）", h ? "✓" : "≈", name);
-        plog(buf);
+        static int shown = 0;
+        if (shown < 3) {
+            shown++;
+            snprintf(buf, sizeof(buf), "  %s %s（核心库，已在进程内）", h ? "✓" : "≈", name);
+            plog(buf);
+        }
         return h ? h : (void*) 1;
     }
 
@@ -174,15 +178,14 @@ __attribute__((constructor)) static void bridge_init() {
     char buf[512];
 
     // 先把 MTK 编译组件连同依赖链准备好（能成就成，不成也不影响后面加载 adapter）
-    loadWithDeps("libneuron_graph_delegate.mtk.so", 0);
-    loadWithDeps("libneuron_platform.so", 0);
     loadWithDeps("libneuron_sys_util.mtk.so", 0);
 
+    // v10.45：先试 HAL 代理版（250 KB）—— 它走 neuronservice 服务，
+    // 不依赖 libutils 那一串被 NDK 白名单挡死的内部库。
     const char* paths[] = {
+        "/system_ext/lib64/libneuronservice_adapter.mtk.so",
         "/system_ext/lib64/libneuronusdk_adapter.9.mtk.so",
         "/system_ext/lib64/libneuronusdk_adapter.mtk.so",
-        "/system_ext/lib64/libneuronservice_adapter.mtk.so",
-        "/system_ext/lib64/libneuron_adapter.so",
     };
     for (const char* p : paths) {
         g_real = dlopen(p, RTLD_NOW | RTLD_GLOBAL);
