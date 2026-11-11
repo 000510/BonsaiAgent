@@ -310,6 +310,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     stacks.take(30).forEach { sb.appendLine(it) }
                 }
             } catch (_: Throwable) { }
+            // v10.68：内存监控行必须单独提取，否则会被末尾 40 行截断挤掉
+            val memLines = full.lines().filter { it.contains("[内存监控]") }
+            if (memLines.isNotEmpty()) {
+                sb.appendLine("--- 内存监控（关键）---")
+                memLines.takeLast(40).forEach { sb.appendLine(it) }
+            }
             val iScan = full.lastIndexOf("--- 全系统库目录扫描 ---")
             if (iScan >= 0) {
                 sb.appendLine("--- NPU 扫描全文 ---")
@@ -840,6 +846,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ) {
         try { LiteRtEngine.unload() } catch (_: Throwable) {}
         Thread.sleep(300)
+        // v10.68：加载前先看系统可用内存。模型权重的 1.3 倍是最低要求，
+        // 不够就别白试了 —— 之前 4B 就是这么被低内存杀手杀掉的。
+        val availMb = try {
+            Regex("MemAvailable:\\s+(\\d+)")
+                .find(java.io.File("/proc/meminfo").readText())
+                ?.groupValues?.get(1)?.toLong()?.div(1024) ?: 0L
+        } catch (_: Throwable) { 0L }
+        val needMb = m.length() / 1048576 * 13 / 10
+        step("系统可用 ${availMb}MB / 本模型需要约 ${needMb}MB")
+        if (availMb in 1 until needMb) {
+            step("❌ 内存不够：需要 ${needMb}MB，只有 ${availMb}MB。请重启手机、关掉后台再试")
+            return
+        }
         if (m.length() > 4L * 1024 * 1024 * 1024) {
             step("⚠ ${m.length() / 1048576}MB 大模型，首次加载要做设备端编译，可能要 1~3 分钟，别切后台")
         }
