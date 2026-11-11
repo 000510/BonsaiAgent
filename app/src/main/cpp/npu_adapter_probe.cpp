@@ -405,8 +405,54 @@ FWD(NeuronModel_getExtensionOperationType)
 FWD(NeuronModel_setOperandSymmPerChannelQuantParams)
 FWD(NeuronModel_setOperandPerChannelQuantParams)
 FWD(NeuronModel_relaxComputationFloat32toFloat16)
-FWD(NeuronModel_restoreFromCompiledNetwork)
-FWD(NeuronModel_restoreFromCompiledNetworkV3)
+extern "C" int64_t NeuronModel_restoreFromCompiledNetwork(
+        uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+        uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 fn = nullptr;
+    if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_restoreFromCompiledNetwork") : nullptr;
+    if (!fn) { plog("缺符号: NeuronModel_restoreFromCompiledNetwork"); return -1; }
+    int64_t r = fn(a, b, c, d, e, f, g, h);
+    char buf[160];
+    snprintf(buf, sizeof(buf), "★★ restoreFromCompiledNetwork(bytecode=%llu 字节) -> %lld",
+             (unsigned long long) d, (long long) r);
+    plog(buf);
+    return r;
+}
+// v10.52【关键修复】
+// LiteRT 的判断是 "指针非空就走 V3，否则走 V2"，且 V3 失败**不会**回退 V2。
+// 我们导出了 V3，但真 adapter 只有 V2 —— 于是 LiteRT 每次都调 V3 拿到 -1，
+// 直接判定 "restore 失败"，退回去走设备端编译，再因为 blockwise 量化彻底失败。
+// 这里把 V3 降级成 V2：
+//   V3(model**, comp**, options, bytecode, size, needCopy, type, compType)  8 个参数
+//   V2(model**, comp**, bytecode, size)                                    4 个参数
+// 对应关系：a→a, b→b, e(bytecode)→c, f(size)→d
+extern "C" int64_t NeuronModel_restoreFromCompiledNetworkV3(
+        uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+        uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    static Fn8 v3 = nullptr;
+    static Fn8 v2 = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        v3 = g_real ? (Fn8) dlsym(g_real, "NeuronModel_restoreFromCompiledNetworkV3") : nullptr;
+        v2 = g_real ? (Fn8) dlsym(g_real, "NeuronModel_restoreFromCompiledNetwork") : nullptr;
+        char buf[256];
+        snprintf(buf, sizeof(buf), "V3 解析: 真adapter V3=%s V2=%s", v3 ? "有" : "无", v2 ? "有" : "无");
+        plog(buf);
+    }
+    if (v3) return v3(a, b, c, d, e, f, g, h);
+    if (v2) {
+        static int once = 0;
+        if (once++ == 0) plog("★ V3 缺失 → 降级调用 V2(bytecode,size)");
+        int64_t r = v2(a, b, e, f);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "★ restoreViaV2 -> %lld", (long long) r);
+        plog(buf);
+        return r;
+    }
+    plog("缺符号: restoreFromCompiledNetwork(V2/V3 都没有)");
+    return -1;
+}
 extern "C" int64_t NeuronModel_finish(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                                      uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
     static Fn8 fn = nullptr;
