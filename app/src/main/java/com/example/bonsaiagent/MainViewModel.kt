@@ -779,9 +779,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             step("====== NPU 测速开始 ======")
             val models = java.io.File(app.filesDir, "models").listFiles()
                 ?.filter { it.name.endsWith(".litertlm") } ?: emptyList()
+            // v10.64：优先 mt6989 定向模型；否则选 per-channel 量化的（可设备端编译）；
+            // 最后才退到其他。blockwise 的一律不要（MTK 明确不支持）。
             val m = models.firstOrNull { it.name.contains("mt6989", true) }
-            if (m == null) { step("❌ 没有 mt6989 定向模型，测速中止"); return@launch }
+                ?: models.firstOrNull {
+                    (it.name.contains("channelwise", true) || it.name.contains("perchannel", true)) &&
+                        !it.name.contains("mixed_int4", true)
+                }
+                ?: models.firstOrNull {
+                    it.name.contains("mediatek", true) && !it.name.contains("mt6993", true)
+                }
+            if (m == null) { step("❌ 没有可用的 NPU 模型，测速中止"); return@launch }
             step("模型 ${m.name} ${m.length() / 1048576}MB")
+            if (m.length() > 4L * 1024 * 1024 * 1024) {
+                step("⚠ 这是 ${m.length() / 1048576}MB 的大模型，首次加载要做设备端编译，可能要 1~3 分钟，别切后台")
+            }
 
             step("正在释放上一个引擎…")
             try { LiteRtEngine.unload() } catch (_: Throwable) {}
