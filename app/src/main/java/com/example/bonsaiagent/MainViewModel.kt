@@ -853,7 +853,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 .find(java.io.File("/proc/meminfo").readText())
                 ?.groupValues?.get(1)?.toLong()?.div(1024) ?: 0L
         } catch (_: Throwable) { 0L }
-        val needMb = m.length() / 1048576 * 13 / 10
+        // v10.69：实测 4B(5409MB) 加载时进程只涨约 2.1GB（LiteRT 是内存映射/分批读），
+        // 所以按模型大小的 0.9 倍估算是够的，1.3 倍太保守会把能跑的情况也拦掉。
+        val needMb = m.length() / 1048576 * 9 / 10
         step("系统可用 ${availMb}MB / 本模型需要约 ${needMb}MB")
         if (availMb in 1 until needMb) {
             step("❌ 内存不够：需要 ${needMb}MB，只有 ${availMb}MB。请重启手机、关掉后台再试")
