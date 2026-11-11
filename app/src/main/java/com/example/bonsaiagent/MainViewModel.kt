@@ -753,8 +753,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 固定 prompt、固定最大长度、先预热一轮排除首次开销，
      * 分别记录首字延迟（prefill 感知）和 decode 段速度。
      */
+    @Volatile private var benchRunning = false
+
     fun probeNpuBench() {
+        if (benchRunning) {
+            status.value = "测速正在进行中，请等它跑完（界面会实时显示进度）"
+            return
+        }
+        benchRunning = true
         viewModelScope.launch(Dispatchers.IO) {
+          try {
             val app = getApplication<android.app.Application>()
             val lf = java.io.File(app.filesDir, "run_log.txt")
             val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
@@ -775,7 +783,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (m == null) { step("❌ 没有 mt6989 定向模型，测速中止"); return@launch }
             step("模型 ${m.name} ${m.length() / 1048576}MB")
 
+            step("正在释放上一个引擎…")
             try { LiteRtEngine.unload() } catch (_: Throwable) {}
+            Thread.sleep(800)          // 给 NPU 一点时间真正释放，否则下一次 load 会卡住
+            step("正在以 NPU 后端加载模型（这一步可能要 5~20 秒，界面会停在这里）…")
             val t0 = System.currentTimeMillis()
             val ok = try { LiteRtEngine.load(app, m.absolutePath, "NPU", settings.value.threads) }
                      catch (t: Throwable) { false }
@@ -810,6 +821,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             step("总耗时 $total ms")
             step("输出预览：${out.take(100)}")
             step("====== 测速结束 ======")
+          } finally {
+            benchRunning = false
+          }
         }
     }
 
