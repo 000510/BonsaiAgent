@@ -413,8 +413,8 @@ extern "C" int64_t NeuronModel_restoreFromCompiledNetwork(
     if (!fn) { plog("缺符号: NeuronModel_restoreFromCompiledNetwork"); return -1; }
     int64_t r = fn(a, b, c, d, e, f, g, h);
     char buf[160];
-    snprintf(buf, sizeof(buf), "★★ restoreFromCompiledNetwork(bytecode=%llu 字节) -> %lld",
-             (unsigned long long) d, (long long) r);
+    snprintf(buf, sizeof(buf), "★★ restoreFromCompiledNetwork(bytecodePtr=%p size=%llu) -> %lld",
+             (void*) c, (unsigned long long) d, (long long) r);
     plog(buf);
     return r;
 }
@@ -444,7 +444,11 @@ extern "C" int64_t NeuronModel_restoreFromCompiledNetworkV3(
     if (v2) {
         static int once = 0;
         if (once++ == 0) plog("★ V3 缺失 → 降级调用 V2(bytecode,size)");
-        int64_t r = v2(a, b, e, f, 0, 0, 0, 0);
+        // V3 实参顺序：a=model** b=comp** c=options d=bytecode e=size f=needCopy g=type h=compType
+        // V2 需要：(model**, comp**, bytecode, size) → a, b, d, e
+        // 上一版错写成 a,b,e,f，等于把 size 当 bytecode、把 needCopy(0) 当 size，
+        // 真 adapter 收到的是一块空内存，才会返回 4(UNMAPPABLE)。
+        int64_t r = v2(a, b, d, e, 0, 0, 0, 0);
         char buf[128];
         snprintf(buf, sizeof(buf), "★ restoreViaV2 -> %lld", (long long) r);
         plog(buf);
