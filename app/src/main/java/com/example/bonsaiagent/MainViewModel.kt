@@ -694,9 +694,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 // v10.52：之前取"最大的那个"，会一直选中 2.17 GB 的旧模型。
                 // 优先选文件名带 mediatek 的 NPU 定向模型。
-                val npuModel = models.firstOrNull {
-                    it.name.contains("mediatek", true) || it.name.contains("mt69", true)
-                }
+                // v10.53：必须先认 mt6989（本机芯片），再看其它 mediatek 定向模型。
+                // 上一版按通配匹配，Qwen3 的 mt6993 排在前面被选中了，白跑一轮。
+                val npuModel = models.firstOrNull { it.name.contains("mt6989", true) }
+                    ?: models.firstOrNull {
+                        it.name.contains("mediatek", true) || it.name.contains("mt69", true)
+                    }
                 step("可用 .litertlm：" + models.joinToString { "${it.name}(${it.length() / 1048576}MB)" })
                 val m = npuModel ?: models.maxByOrNull { it.length() }!!
                 step("选用模型 ${m.name} ${m.length() / 1048576}MB" +
