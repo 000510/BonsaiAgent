@@ -791,8 +791,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ?.filter { it.name.endsWith(".litertlm") } ?: emptyList()
                 val candidates = ArrayList<java.io.File>()
                 models.firstOrNull { it.name.contains("mt6989", true) }?.let { candidates.add(it) }
+                // v10.70：per-channel 各种命名都认（channelwise / int2pc / perchannel）
                 models.firstOrNull {
-                    it.name.contains("channelwise", true) && !it.name.contains("mixed_int4", true)
+                    val n = it.name.lowercase()
+                    (n.contains("channelwise") || n.contains("int2pc") || n.contains("perchannel")) &&
+                        !n.contains("mixed_int4") && !n.contains("block")
                 }?.let { c -> if (candidates.none { it.name == c.name }) candidates.add(c) }
 
                 if (candidates.isEmpty()) {
