@@ -797,7 +797,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             step("会话就绪，开始预热（排除首次开销）…")
             try { LiteRtEngine.generate("你好", 60) { } } catch (_: Throwable) {}
 
-            val prompt = "请用大约一百个字介绍一下你自己，以及你能帮我做什么。"
+            // v10.62：上次只回了 10 个字就停了（Gemma3-1B 中文弱 + 没写长文）。
+            // 换成英文长文任务，才能测出真实的 decode 速度。
+            val prompt = "Write a detailed 250-word explanation of how a smartphone camera captures an image, from the lens to the final JPEG file."
             var firstMs = -1L
             var calls = 0
             val start = System.currentTimeMillis()
@@ -812,11 +814,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             step("生成完成：${out.length} 字，流式回调 $calls 次，内存=${rss()}MB")
             step("首字延迟 TTFT = $firstMs ms")
             val decodeMs = total - (if (firstMs > 0) firstMs else 0)
-            if (decodeMs > 500 && out.length > 5) {
-                val speed = out.length * 1000.0 / decodeMs
-                step("decode 段 $decodeMs ms → 约 ${String.format(java.util.Locale.US, "%.1f", speed)} 字/秒")
+            if (decodeMs > 800 && out.length > 20) {
+                val cps = out.length * 1000.0 / decodeMs
+                val tps = out.length / 4.0 * 1000.0 / decodeMs   // 英文约 4 字符/token
+                step("decode 段 $decodeMs ms")
+                step("速度 = ${String.format(java.util.Locale.US, "%.1f", cps)} 字符/秒" +
+                     "（约 ${String.format(java.util.Locale.US, "%.1f", tps)} token/秒）")
             } else {
-                step("decode 段太短（$decodeMs ms），数据不足")
+                step("decode 段太短（$decodeMs ms / ${out.length} 字），数据不足")
             }
             step("总耗时 $total ms")
             step("输出预览：${out.take(100)}")
