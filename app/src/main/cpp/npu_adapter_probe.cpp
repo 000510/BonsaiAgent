@@ -444,7 +444,7 @@ extern "C" int64_t NeuronModel_restoreFromCompiledNetworkV3(
     if (v2) {
         static int once = 0;
         if (once++ == 0) plog("★ V3 缺失 → 降级调用 V2(bytecode,size)");
-        int64_t r = v2(a, b, e, f);
+        int64_t r = v2(a, b, e, f, 0, 0, 0, 0);
         char buf[128];
         snprintf(buf, sizeof(buf), "★ restoreViaV2 -> %lld", (long long) r);
         plog(buf);
