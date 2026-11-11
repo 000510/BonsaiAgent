@@ -715,6 +715,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     step("① load 抛异常 ${t.javaClass.simpleName}: ${t.message}")
                 }
                 step("① load 返回=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000}s 内存 ${memInfo()}")
+                if (!ok) step("① 失败原因: ${LiteRtEngine.lastError}")
 
                 if (ok) {
                     step("② 当前后端=${LiteRtEngine.currentBackend()}")
