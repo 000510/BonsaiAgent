@@ -829,9 +829,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             step("⚠ ${m.length() / 1048576}MB 大模型，首次加载要做设备端编译，可能要 1~3 分钟，别切后台")
         }
         step("正在以 NPU 后端加载…")
+        val lf0 = java.io.File(app.filesDir, "run_log.txt")
+        // v10.66：加载大模型时开个看门狗，每 2 秒记一次内存。
+        // 如果进程是被内存挤死的，日志里能看到最后冲到多少。
+        val watchdog = Thread {
+            try {
+                repeat(120) {
+                    Thread.sleep(2000)
+                    val mi = try { java.io.File("/proc/meminfo").readText() } catch (_: Throwable) { "" }
+                    val avail = Regex("MemAvailable:\\s+(\\d+)").find(mi)?.groupValues?.get(1)
+                        ?.toLong()?.div(1024)
+                    val rss = try {
+                        java.io.File("/proc/self/status").readLines()
+                            .firstOrNull { it.startsWith("VmRSS:") }
+                            ?.replace(Regex("[^0-9]"), "")?.toLong()?.div(1024)
+                    } catch (_: Throwable) { null }
+                    try {
+                        lf0.appendText("[内存监控] 可用=${avail}MB 本进程=${rss}MB\n")
+                    } catch (_: Throwable) {}
+                }
+            } catch (_: Throwable) {}
+        }
+        watchdog.isDaemon = true
+        watchdog.start()
         val t0 = System.currentTimeMillis()
         val ok = try { LiteRtEngine.load(app, m.absolutePath, "NPU", settings.value.threads) }
                  catch (t: Throwable) { false }
+        try { watchdog.interrupt() } catch (_: Throwable) {}
         step("load=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000}s")
         if (!ok) { step("失败原因: ${LiteRtEngine.lastError}"); return }
 
