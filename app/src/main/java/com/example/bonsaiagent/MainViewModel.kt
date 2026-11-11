@@ -793,13 +793,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             step("load=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000}s 内存=${rss()}MB")
             if (!ok) { step("失败原因: ${LiteRtEngine.lastError}"); return@launch }
 
-            LiteRtEngine.newConversation("你是一个手机助手，回答简洁。", 0.7, 40, 0.95)
+            // v10.63：之前写"回答简洁"，模型就真的只答一句，测不出速度
+            LiteRtEngine.newConversation(
+                "You are a helpful assistant. Always answer thoroughly and in detail, " +
+                "using full paragraphs. Never reply with a single sentence.", 0.7, 40, 0.95)
             step("会话就绪，开始预热（排除首次开销）…")
-            try { LiteRtEngine.generate("你好", 60) { } } catch (_: Throwable) {}
+            try { LiteRtEngine.generate("Hello", 60) { } } catch (_: Throwable) {}
 
             // v10.62：上次只回了 10 个字就停了（Gemma3-1B 中文弱 + 没写长文）。
             // 换成英文长文任务，才能测出真实的 decode 速度。
-            val prompt = "Write a detailed 250-word explanation of how a smartphone camera captures an image, from the lens to the final JPEG file."
+            val prompt = "Write a long detailed essay of at least 200 words explaining step by step how a smartphone camera captures an image and turns it into a JPEG file. Do not stop early."
             var firstMs = -1L
             var calls = 0
             val start = System.currentTimeMillis()

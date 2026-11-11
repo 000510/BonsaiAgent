@@ -65,7 +65,9 @@ object LiteRtEngine {
             val cfg = EngineConfig(
                 modelPath = modelPath,
                 backend = backend,
-                maxNumTokens = 2048
+                // v10.63：默认 2048 超过了 ekv1280 模型的 KV 容量（1280），
+                // 会把模型顶到异常状态（只回一句话就 EOS）。这里降到 1024。
+                maxNumTokens = if (modelPath.contains("ekv1280", true)) 1024 else 2048
             )
             val e = Engine(cfg)
             e.initialize()
