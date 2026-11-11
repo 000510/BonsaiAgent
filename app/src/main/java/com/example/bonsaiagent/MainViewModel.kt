@@ -793,7 +793,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     step("❌ 没有可用的 NPU 模型（需要 mt6989 或 channelwise 量化），测速中止")
                     return@launch
                 }
-                step("候选模型 ${candidates.size} 个：" + candidates.joinToString { it.name })
+                // v10.67：大模型先测 —— 避免先跑小模型占住 NPU/内存，导致大模型加载时撞车
+                candidates.sortByDescending { it.length() }
+                step("候选模型 ${candidates.size} 个（大的先测）：" + candidates.joinToString { it.name })
 
                 for ((idx, cand) in candidates.withIndex()) {
                     step("【${idx + 1}/${candidates.size}】${cand.name} ${cand.length() / 1048576}MB")
@@ -807,8 +809,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     } catch (t: Throwable) {
                         step("【${cand.name}】异常：${t.javaClass.simpleName} ${t.message}")
                     }
+                    // v10.67：等 NPU 真正放手 + 内存回落，再测下一个。
                     try { LiteRtEngine.unload() } catch (_: Throwable) {}
-                    Thread.sleep(800)
+                    var waited = 0
+                    while (waited < 15000) {
+                        Thread.sleep(500)
+                        waited += 500
+                        val rssNow = try {
+                            java.io.File("/proc/self/status").readLines()
+                                .firstOrNull { it.startsWith("VmRSS:") }
+                                ?.replace(Regex("[^0-9]"), "")?.toLong()?.div(1024) ?: 0L
+                        } catch (_: Throwable) { 0L }
+                        if (rssNow in 1..1200) break       // 回落到 1.2GB 以内就算放手了
+                    }
+                    step("释放完成，等待 ${waited}ms，当前进程内存 ${rss()}MB")
+                    Thread.sleep(2000)                      // 再给驱动 2 秒硬缓冲
                 }
                 step("====== 全部测速结束 ======")
             } finally {
