@@ -53,6 +53,10 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         OutlinedButton(onClick = { vm.probeNpuRun() }) {
             Text("⚡ 一键 NPU 自检（自动跑一次推理）")
         }
+        // v10.60：NPU 通了之后的正式测速
+        OutlinedButton(onClick = { vm.probeNpuBench() }) {
+            Text("🏁 NPU 测速（prefill / decode）")
+        }
 
         // v10.22：模型管理 —— 私有目录里的模型会一直堆着不删，
         // 实测堆到 11.83 GB（三值模型好几份 + 各家 gguf），把手机撑爆。

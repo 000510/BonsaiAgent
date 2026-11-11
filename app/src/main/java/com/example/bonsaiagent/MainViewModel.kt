@@ -748,6 +748,71 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * v10.60：NPU 正式测速。
+     * 固定 prompt、固定最大长度、先预热一轮排除首次开销，
+     * 分别记录首字延迟（prefill 感知）和 decode 段速度。
+     */
+    fun probeNpuBench() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<android.app.Application>()
+            val lf = java.io.File(app.filesDir, "run_log.txt")
+            val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+            fun step(msg: String) {
+                try { lf.appendText("[测速 ${fmt.format(java.util.Date())}] $msg\n") } catch (_: Throwable) {}
+                status.value = msg
+            }
+            fun rss(): String = try {
+                java.io.File("/proc/self/status").readLines()
+                    .firstOrNull { it.startsWith("VmRSS:") }
+                    ?.replace(Regex("[^0-9]"), "")?.toLong()?.div(1024)?.toString() ?: "?"
+            } catch (_: Throwable) { "?" }
+
+            step("====== NPU 测速开始 ======")
+            val models = java.io.File(app.filesDir, "models").listFiles()
+                ?.filter { it.name.endsWith(".litertlm") } ?: emptyList()
+            val m = models.firstOrNull { it.name.contains("mt6989", true) }
+            if (m == null) { step("❌ 没有 mt6989 定向模型，测速中止"); return@launch }
+            step("模型 ${m.name} ${m.length() / 1048576}MB")
+
+            try { LiteRtEngine.unload() } catch (_: Throwable) {}
+            val t0 = System.currentTimeMillis()
+            val ok = try { LiteRtEngine.load(app, m.absolutePath, "NPU", settings.value.threads) }
+                     catch (t: Throwable) { false }
+            step("load=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000}s 内存=${rss()}MB")
+            if (!ok) { step("失败原因: ${LiteRtEngine.lastError}"); return@launch }
+
+            LiteRtEngine.newConversation("你是一个手机助手，回答简洁。", 0.7, 40, 0.95)
+            step("会话就绪，开始预热（排除首次开销）…")
+            try { LiteRtEngine.generate("你好", 60) { } } catch (_: Throwable) {}
+
+            val prompt = "请用大约一百个字介绍一下你自己，以及你能帮我做什么。"
+            var firstMs = -1L
+            var calls = 0
+            val start = System.currentTimeMillis()
+            val out = try {
+                LiteRtEngine.generate(prompt, 240) {
+                    if (firstMs < 0) firstMs = System.currentTimeMillis() - start
+                    calls++
+                }
+            } catch (t: Throwable) { step("生成异常 ${t.javaClass.simpleName} ${t.message}"); "" }
+            val total = System.currentTimeMillis() - start
+
+            step("生成完成：${out.length} 字，流式回调 $calls 次，内存=${rss()}MB")
+            step("首字延迟 TTFT = $firstMs ms")
+            val decodeMs = total - (if (firstMs > 0) firstMs else 0)
+            if (decodeMs > 500 && out.length > 5) {
+                val speed = out.length * 1000.0 / decodeMs
+                step("decode 段 $decodeMs ms → 约 ${String.format(java.util.Locale.US, "%.1f", speed)} 字/秒")
+            } else {
+                step("decode 段太短（$decodeMs ms），数据不足")
+            }
+            step("总耗时 $total ms")
+            step("输出预览：${out.take(100)}")
+            step("====== 测速结束 ======")
+        }
+    }
+
     fun loadModelFile(f: java.io.File) {
         if (!f.exists()) { status.value = "文件不见了：${f.name}"; refreshModels(); return }
         modelPath.value = f.absolutePath
