@@ -32,6 +32,7 @@
 
 static const char* kLogPath = "/data/data/com.example.bonsailite/files/npu_bridge.log";
 static void* g_real = nullptr;
+static void* g_alt = nullptr;   // 第二个 adapter（不同版本），restore 失败时用来重试
 
 static void plog(const char* s);   // 前置声明：统计函数定义在 plog 之前
 
@@ -264,6 +265,38 @@ __attribute__((constructor)) static void bridge_init() {
     }
     if (!g_real) plog("❌ 所有路径均加载失败");
 
+    // v10.58：再挂一个不同版本的 adapter，打印双方版本号，并在 restore 失败时换着试
+    {
+        const char* altPaths[] = {
+            "/system_ext/lib64/libneuronusdk_adapter.mtk.so",
+            "/system_ext/lib64/libneuronusdk_adapter.9.mtk.so",
+        };
+        for (const char* p : altPaths) {
+            if (g_real && strcmp(p, "") == 0) break;
+            void* h = dlopen(p, RTLD_NOW | RTLD_LOCAL);
+            if (h && h != g_real) {
+                g_alt = h;
+                char b[320];
+                snprintf(b, sizeof(b), "备用 adapter: %s", p);
+                plog(b);
+                break;
+            }
+        }
+        // 打印两个版本
+        auto showVer = [](const char* tag, void* h) {
+            if (!h) return;
+            auto getv = (int64_t (*)(void*)) dlsym(h, "Neuron_getVersion");
+            if (!getv) return;
+            unsigned char v[4] = {0, 0, 0, 0};
+            int64_t r = getv(v);
+            char b[200];
+            snprintf(b, sizeof(b), "%s 版本 = %u.%u.%u (ret=%lld)", tag, v[0], v[1], v[2], (long long) r);
+            plog(b);
+        };
+        showVer("主adapter", g_real);
+        showVer("备用adapter", g_alt);
+    }
+
     // ---- v10.47 自检 ----
     // 疑问：LiteRT 建完图（identifyIO 成功）却直接 free，说明它认为
     //       model_finish 不可用。这里直接确认我们的转发层到底导出了没有，
@@ -415,10 +448,19 @@ extern "C" int64_t NeuronModel_restoreFromCompiledNetwork(
     if (!fn) fn = g_real ? (Fn8) dlsym(g_real, "NeuronModel_restoreFromCompiledNetwork") : nullptr;
     if (!fn) { plog("缺符号: NeuronModel_restoreFromCompiledNetwork"); return -1; }
     int64_t r = fn(a, b, c, d, e, f, g, h);
-    char buf[160];
+    char buf[200];
     snprintf(buf, sizeof(buf), "★★ restoreFromCompiledNetwork(bytecodePtr=%p size=%llu) -> %lld",
              (void*) c, (unsigned long long) d, (long long) r);
     plog(buf);
+    if (r != 0 && g_alt) {
+        auto f2 = (Fn8) dlsym(g_alt, "NeuronModel_restoreFromCompiledNetwork");
+        if (f2) {
+            int64_t r2 = f2(a, b, c, d, e, f, g, h);
+            snprintf(buf, sizeof(buf), "★★ 用备用 adapter 重试 -> %lld", (long long) r2);
+            plog(buf);
+            if (r2 == 0) return 0;
+        }
+    }
     return r;
 }
 // v10.52【关键修复】
