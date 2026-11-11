@@ -240,7 +240,10 @@ __attribute__((constructor)) static void bridge_init() {
     char buf[512];
 
     // 先把 MTK 编译组件连同依赖链准备好（能成就成，不成也不影响后面加载 adapter）
+    // v10.55：restore 返回 4(UNMAPPABLE)，很可能是缺内存映射组件。
+    // platform 负责 ION/VPU 的 DMA buffer 分配，它在 adapter restore 时会被用到。
     loadWithDeps("libneuron_sys_util.mtk.so", 0);
+    loadWithDeps("libneuron_platform.so", 0);
 
     // v10.45：先试 HAL 代理版（250 KB）—— 它走 neuronservice 服务，
     // 不依赖 libutils 那一串被 NDK 白名单挡死的内部库。

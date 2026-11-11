@@ -12,8 +12,8 @@ android {
         applicationId "com.example.bonsailite"
         minSdk 26            // Android 8.0，覆盖绝大多数现役手机
         targetSdk 34
-        versionCode 92
-        versionName "10.54"
+        versionCode 93
+        versionName "10.55"
 
         // 只编 arm64（手机主流，体积也小）
         ndk { abiFilters 'arm64-v8a' }
@@ -108,7 +108,7 @@ dependencies {
     //
     // 注意：这条依赖如果拉不下来或要求更高 compileSdk，编译会直接报错，
     // 到时候把这一行注释掉即可回到纯 llama.cpp 路径。
-    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.17.1'
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.19.1'
 
     // v10.28【关键】Google 官方发布的联发科 NPU 运行时，AAR 里直接带两个 .so：
     //   libLiteRtDispatch_MediaTek.so    （LiteRT 的 NPU 调度器，330 KB）
