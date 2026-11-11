@@ -755,14 +755,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     @Volatile private var benchRunning = false
 
+    /**
+     * v10.65：依次测所有可用的 NPU 候选模型（mt6989 定向 + per-channel 通用），
+     * 并对文件大小做硬校验 —— 残文件会让加载卡一两分钟，白等。
+     */
     fun probeNpuBench() {
         if (benchRunning) {
-            status.value = "测速正在进行中，请等它跑完（界面会实时显示进度）"
+            status.value = "测速正在进行中，等它跑完（界面会实时显示进度）"
             return
         }
         benchRunning = true
         viewModelScope.launch(Dispatchers.IO) {
-          try {
             val app = getApplication<android.app.Application>()
             val lf = java.io.File(app.filesDir, "run_log.txt")
             val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
@@ -776,75 +779,91 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ?.replace(Regex("[^0-9]"), "")?.toLong()?.div(1024)?.toString() ?: "?"
             } catch (_: Throwable) { "?" }
 
-            step("====== NPU 测速开始 ======")
-            val models = java.io.File(app.filesDir, "models").listFiles()
-                ?.filter { it.name.endsWith(".litertlm") } ?: emptyList()
-            // v10.64：优先 mt6989 定向模型；否则选 per-channel 量化的（可设备端编译）；
-            // 最后才退到其他。blockwise 的一律不要（MTK 明确不支持）。
-            val m = models.firstOrNull { it.name.contains("mt6989", true) }
-                ?: models.firstOrNull {
-                    (it.name.contains("channelwise", true) || it.name.contains("perchannel", true)) &&
-                        !it.name.contains("mixed_int4", true)
+            try {
+                step("====== NPU 测速开始 ======")
+                val models = java.io.File(app.filesDir, "models").listFiles()
+                    ?.filter { it.name.endsWith(".litertlm") } ?: emptyList()
+                val candidates = ArrayList<java.io.File>()
+                models.firstOrNull { it.name.contains("mt6989", true) }?.let { candidates.add(it) }
+                models.firstOrNull {
+                    it.name.contains("channelwise", true) && !it.name.contains("mixed_int4", true)
+                }?.let { c -> if (candidates.none { it.name == c.name }) candidates.add(c) }
+
+                if (candidates.isEmpty()) {
+                    step("❌ 没有可用的 NPU 模型（需要 mt6989 或 channelwise 量化），测速中止")
+                    return@launch
                 }
-                ?: models.firstOrNull {
-                    it.name.contains("mediatek", true) && !it.name.contains("mt6993", true)
+                step("候选模型 ${candidates.size} 个：" + candidates.joinToString { it.name })
+
+                for ((idx, cand) in candidates.withIndex()) {
+                    step("【${idx + 1}/${candidates.size}】${cand.name} ${cand.length() / 1048576}MB")
+                    if (cand.name.contains("channelwise", true) &&
+                        cand.length() < 4L * 1024 * 1024 * 1024) {
+                        step("❌ 跳过：只有 ${cand.length() / 1048576}MB，正常约 5410MB（下载不完整）")
+                        continue
+                    }
+                    try {
+                        benchOneModel(app, cand) { msg -> step(msg) } 
+                    } catch (t: Throwable) {
+                        step("【${cand.name}】异常：${t.javaClass.simpleName} ${t.message}")
+                    }
+                    try { LiteRtEngine.unload() } catch (_: Throwable) {}
+                    Thread.sleep(800)
                 }
-            if (m == null) { step("❌ 没有可用的 NPU 模型，测速中止"); return@launch }
-            step("模型 ${m.name} ${m.length() / 1048576}MB")
-            if (m.length() > 4L * 1024 * 1024 * 1024) {
-                step("⚠ 这是 ${m.length() / 1048576}MB 的大模型，首次加载要做设备端编译，可能要 1~3 分钟，别切后台")
+                step("====== 全部测速结束 ======")
+            } finally {
+                benchRunning = false
             }
-
-            step("正在释放上一个引擎…")
-            try { LiteRtEngine.unload() } catch (_: Throwable) {}
-            Thread.sleep(800)          // 给 NPU 一点时间真正释放，否则下一次 load 会卡住
-            step("正在以 NPU 后端加载模型（这一步可能要 5~20 秒，界面会停在这里）…")
-            val t0 = System.currentTimeMillis()
-            val ok = try { LiteRtEngine.load(app, m.absolutePath, "NPU", settings.value.threads) }
-                     catch (t: Throwable) { false }
-            step("load=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000}s 内存=${rss()}MB")
-            if (!ok) { step("失败原因: ${LiteRtEngine.lastError}"); return@launch }
-
-            // v10.63：之前写"回答简洁"，模型就真的只答一句，测不出速度
-            LiteRtEngine.newConversation(
-                "You are a helpful assistant. Always answer thoroughly and in detail, " +
-                "using full paragraphs. Never reply with a single sentence.", 0.7, 40, 0.95)
-            step("会话就绪，开始预热（排除首次开销）…")
-            try { LiteRtEngine.generate("Hello", 60) { } } catch (_: Throwable) {}
-
-            // v10.62：上次只回了 10 个字就停了（Gemma3-1B 中文弱 + 没写长文）。
-            // 换成英文长文任务，才能测出真实的 decode 速度。
-            val prompt = "Write a long detailed essay of at least 200 words explaining step by step how a smartphone camera captures an image and turns it into a JPEG file. Do not stop early."
-            var firstMs = -1L
-            var calls = 0
-            val start = System.currentTimeMillis()
-            val out = try {
-                LiteRtEngine.generate(prompt, 240) {
-                    if (firstMs < 0) firstMs = System.currentTimeMillis() - start
-                    calls++
-                }
-            } catch (t: Throwable) { step("生成异常 ${t.javaClass.simpleName} ${t.message}"); "" }
-            val total = System.currentTimeMillis() - start
-
-            step("生成完成：${out.length} 字，流式回调 $calls 次，内存=${rss()}MB")
-            step("首字延迟 TTFT = $firstMs ms")
-            val decodeMs = total - (if (firstMs > 0) firstMs else 0)
-            if (decodeMs > 800 && out.length > 20) {
-                val cps = out.length * 1000.0 / decodeMs
-                val tps = out.length / 4.0 * 1000.0 / decodeMs   // 英文约 4 字符/token
-                step("decode 段 $decodeMs ms")
-                step("速度 = ${String.format(java.util.Locale.US, "%.1f", cps)} 字符/秒" +
-                     "（约 ${String.format(java.util.Locale.US, "%.1f", tps)} token/秒）")
-            } else {
-                step("decode 段太短（$decodeMs ms / ${out.length} 字），数据不足")
-            }
-            step("总耗时 $total ms")
-            step("输出预览：${out.take(100)}")
-            step("====== 测速结束 ======")
-          } finally {
-            benchRunning = false
-          }
         }
+    }
+
+    /** 单个模型的完整测速：加载 → 预热 → 计时生成 */
+    private fun benchOneModel(
+        app: android.app.Application,
+        m: java.io.File,
+        step: (String) -> Unit
+    ) {
+        try { LiteRtEngine.unload() } catch (_: Throwable) {}
+        Thread.sleep(300)
+        if (m.length() > 4L * 1024 * 1024 * 1024) {
+            step("⚠ ${m.length() / 1048576}MB 大模型，首次加载要做设备端编译，可能要 1~3 分钟，别切后台")
+        }
+        step("正在以 NPU 后端加载…")
+        val t0 = System.currentTimeMillis()
+        val ok = try { LiteRtEngine.load(app, m.absolutePath, "NPU", settings.value.threads) }
+                 catch (t: Throwable) { false }
+        step("load=$ok 耗时=${(System.currentTimeMillis() - t0) / 1000}s")
+        if (!ok) { step("失败原因: ${LiteRtEngine.lastError}"); return }
+
+        LiteRtEngine.newConversation(
+            "You are a helpful assistant. Always answer thoroughly and in detail, " +
+            "using full paragraphs. Never reply with a single sentence.", 0.7, 40, 0.95)
+        step("预热中…")
+        try { LiteRtEngine.generate("Hello", 60) { } } catch (_: Throwable) {}
+
+        val prompt = "Write a long detailed essay of at least 200 words explaining step by step " +
+            "how a smartphone camera captures an image and turns it into a JPEG file. Do not stop early."
+        var firstMs = -1L
+        var calls = 0
+        val start = System.currentTimeMillis()
+        val out = try {
+            LiteRtEngine.generate(prompt, 240) {
+                if (firstMs < 0) firstMs = System.currentTimeMillis() - start
+                calls++
+            }
+        } catch (t: Throwable) { step("生成异常 ${t.javaClass.simpleName} ${t.message}"); "" }
+        val total = System.currentTimeMillis() - start
+
+        step("输出 ${out.length} 字 / $calls 次回调")
+        step("首字延迟 TTFT = $firstMs ms")
+        val decodeMs = total - (if (firstMs > 0) firstMs else 0)
+        if (decodeMs > 800 && calls > 20) {
+            val tps = calls * 1000.0 / decodeMs
+            step("decode $decodeMs ms → 约 ${String.format(java.util.Locale.US, "%.1f", tps)} token/秒")
+        } else {
+            step("decode 段太短（$decodeMs ms / $calls 回调），数据不足")
+        }
+        step("预览：${out.take(80)}")
     }
 
     fun loadModelFile(f: java.io.File) {
