@@ -233,6 +233,58 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * v10.70：OpenCL 探测。
+     *
+     * LiteRT 的 GPU 后端在 Android 上要 dlopen "libOpenCL.so"，找不到就报
+     * "Can not find OpenCL library on this device"（Status Code 2）。
+     * 这里把厂商分区扫一遍，并对每个候选真 dlopen 一次，用于分清两种失败：
+     *   A. 系统里根本没有 OpenCL  —— GPU 后端注定不可用，只能回 CPU
+     *   B. 有库但 App 的 linker namespace 搜不到 —— 可以把库复制进私有 lib 目录骗过链接器
+     */
+    fun probeOpenCL() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val sb = StringBuilder()
+            sb.appendLine("=== OpenCL 探测 ===")
+            val dirs = listOf(
+                "/vendor/lib64", "/vendor/lib", "/system/lib64", "/system/lib",
+                "/odm/lib64", "/vendor/lib64/egl", "/vendor/lib64/hw"
+            )
+            val ok = mutableListOf<String>()
+            for (d in dirs) {
+                val f = java.io.File(d)
+                if (!f.exists()) { sb.appendLine("$d 不存在"); continue }
+                if (!f.canRead()) { sb.appendLine("$d 不可读（权限）"); continue }
+                val hits: List<java.io.File> = try {
+                    f.listFiles()?.filter { it.name.lowercase().contains("opencl") } ?: emptyList()
+                } catch (t: Throwable) {
+                    emptyList()
+                }
+                if (hits.isEmpty()) { sb.appendLine("$d 可读，无 OpenCL"); continue }
+                for (file in hits) {
+                    val r = Llama.probeDlopen(file.absolutePath)
+                    sb.appendLine("  ${file.absolutePath}  ${file.length() / 1024} KB")
+                    sb.appendLine("    → $r")
+                    if (r.contains("dlopen=OK")) ok.add(file.absolutePath)
+                }
+            }
+            sb.appendLine()
+            sb.appendLine(
+                if (ok.isNotEmpty()) {
+                    "小结：可直接 dlopen 的 OpenCL：" + ok.joinToString(" / ")
+                } else {
+                    "小结：系统里没有能直接 dlopen 的 OpenCL。GPU 后端只能放弃，回 CPU。"
+                }
+            )
+            try {
+                val lf = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
+                lf.appendText("\n" + sb.toString())
+            } catch (_: Throwable) {}
+
+            withContext(Dispatchers.Main) { status.value = sb.toString().trim() }
+        }
+    }
+
     /** 设置页「刷新应用列表」：重新读一遍系统应用清单 */
     fun refreshApps() {
         viewModelScope.launch(Dispatchers.IO) {
