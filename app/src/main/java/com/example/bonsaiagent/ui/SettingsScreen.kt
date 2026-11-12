@@ -48,6 +48,11 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         OutlinedButton(onClick = { vm.probeNpuDeep() }) {
             Text("NPU 终极探测（扫 system_ext）")
         }
+        // v10.70：GPU 后端要 dlopen libOpenCL.so，找不到就报 Status Code 2。
+        // 这里扫厂商分区并逐个真 dlopen，分清「没有库」还是「有库但搜不到」
+        OutlinedButton(onClick = { vm.probeOpenCL() }) {
+            Text("🔍 探测 OpenCL（GPU 后端依赖）")
+        }
         // v10.31：一键自检 —— 自动用 NPU 后端加载 .litertlm 并生成一句话，
         // 把 LiteRT 真的推到 dispatch → adapter 这条线上
         OutlinedButton(onClick = { vm.probeNpuRun() }) {
