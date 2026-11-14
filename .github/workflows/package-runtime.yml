@@ -1,0 +1,92 @@
+name: package-runtime
+
+# 把小文件打成一个运行包（不含 .pte，模型用户已单独下载）
+# 产出 qwen_npu_runtime.tar.gz：runner + 3 个 so + tokenizer + run 脚本
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_tag:
+        description: "runner release tag"
+        default: "runner-20261114-1029"
+      model:
+        description: "Qwen3-1.7B"
+        default: "Qwen3-1.7B"
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: 准备目录
+        run: |
+          mkdir -p pkg && cd pkg
+          echo ok
+
+      - name: 下载 runner 与后端库
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd pkg
+          R="${{ github.event.inputs.runner_tag }}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/$R"
+          for f in mtk_llama_executor_runner libneuron_backend.so; do
+            curl -sSL -H "Authorization: token $GH_TOKEN" -o "$f" "$BASE/$f"
+          done
+          ls -lh
+
+      - name: 下载 NeuroPilot 库
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd pkg
+          curl -sSL -H "Authorization: token $GH_TOKEN" -o sdk_libs.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/sdk/sdk_libs.tar.gz"
+          tar -xzf sdk_libs.tar.gz
+          cp neuropilot-express-sdk-*/libneuronusdk_adapter.mtk.so .
+          cp neuropilot-express-sdk-*/libneuron_buffer_allocator.so .
+          rm -rf neuropilot-express-sdk-* sdk_libs.tar.gz
+          ls -lh
+
+      - name: 下载 tokenizer
+        env:
+          GH_MODEL: ${{ github.event.inputs.model }}
+        run: |
+          cd pkg
+          python3 -m pip install -q huggingface_hub
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          m = os.environ["GH_MODEL"]
+          snapshot_download(repo_id="Qwen/" + m, local_dir=".",
+              allow_patterns=["tokenizer.json", "tokenizer_config.json", "vocab.json",
+                              "merges.txt", "generation_config.json"])
+          print("tokenizer ok")
+          PY
+          ls -lh
+
+      - name: 打包
+        run: |
+          cd pkg
+          chmod +x ./*.sh 2>/dev/null || true
+          tar -czf ../qwen_npu_runtime.tar.gz .
+          cd ..
+          ls -lh qwen_npu_runtime.tar.gz
+
+      - name: 上传到 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="runtime-$(date +%Y%m%d-%H%M)"
+          gh release create "$TAG" -R ${{ github.repository }} --title "$TAG" --notes "Qwen NPU runtime bundle (no pte)" qwen_npu_runtime.tar.gz || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-bundle
+          path: qwen_npu_runtime.tar.gz
+          if-no-files-found: warn
