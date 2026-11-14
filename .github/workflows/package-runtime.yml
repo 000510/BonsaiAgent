@@ -46,10 +46,11 @@ jobs:
           cd pkg
           curl -sSL -H "Authorization: token $GH_TOKEN" -o sdk_libs.tar.gz \
             "https://github.com/${{ github.repository }}/releases/download/sdk/sdk_libs.tar.gz"
-          tar -xzf sdk_libs.tar.gz
-          cp neuropilot-express-sdk-*/libneuronusdk_adapter.mtk.so .
-          cp neuropilot-express-sdk-*/libneuron_buffer_allocator.so .
-          rm -rf neuropilot-express-sdk-* sdk_libs.tar.gz
+          mkdir -p sdkx && tar -xzf sdk_libs.tar.gz -C sdkx
+          find sdkx -type f | head
+          cp sdkx/libneuronusdk_adapter.mtk.so .
+          cp sdkx/libneuron_buffer_allocator.so .
+          rm -rf sdkx sdk_libs.tar.gz
           ls -lh
 
       - name: 下载 tokenizer
