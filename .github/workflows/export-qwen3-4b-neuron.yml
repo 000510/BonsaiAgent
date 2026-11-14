@@ -81,8 +81,13 @@ jobs:
           # torch CPU 版，减小体积
           pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip3 install huggingface_hub transformers safetensors sentencepiece accelerate
+          # 官方导出脚本依赖（datasets 必须，否则 qwen.py 直接 ModuleNotFoundError）
+          if [ -f executorch/examples/mediatek/requirements.txt ]; then
+            pip3 install -r executorch/examples/mediatek/requirements.txt || echo "部分依赖失败，继续"
+          fi
+          pip3 install datasets piq pillow tokenizers || true
           cd executorch && pip3 install -e . || pip3 install executorch
-          python3 -c "import mtk_converter, torch; print('mtk_converter OK, torch', torch.__version__)"
+          python3 -c "import mtk_converter, torch, datasets; print('mtk_converter OK, torch', torch.__version__)"
 
       - name: 下载 Qwen3-4B 权重
         run: |
