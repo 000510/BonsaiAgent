@@ -60,13 +60,6 @@ jobs:
              executorch/backends/mediatek/runtime/include/api/
           ls -l executorch/backends/mediatek/runtime/include/api/
 
-      - name: 先编后端库（生成 cmake-android-out）
-        run: |
-          cd executorch/backends/mediatek/scripts
-          chmod +x mtk_build.sh
-          ./mtk_build.sh
-          ls -d $GITHUB_WORKSPACE/executorch/cmake-android-out
-
       - name: 安装 Python 编译依赖
         run: |
           sudo apt-get install -y -qq python3-pip
@@ -75,6 +68,13 @@ jobs:
           pip3 install pyyaml numpy flatbuffers
           cd executorch && pip3 install -e . --no-build-isolation || pip3 install executorch
           python3 -c "import executorch, torchgen; print('executorch ok')" || echo "torchgen 仍缺失，继续"
+
+      - name: 先编后端库（生成 cmake-android-out）
+        run: |
+          cd executorch/backends/mediatek/scripts
+          chmod +x mtk_build.sh
+          ./mtk_build.sh
+          ls -d $GITHUB_WORKSPACE/executorch/cmake-android-out
 
       - name: 编译 examples（含 executor_runner）
         run: |
