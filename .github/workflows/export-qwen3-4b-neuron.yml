@@ -88,9 +88,17 @@ jobs:
           if [ -f executorch/examples/mediatek/requirements.txt ]; then
             pip3 install -r executorch/examples/mediatek/requirements.txt || echo "部分依赖失败，继续"
           fi
-          pip3 install datasets piq pillow tokenizers || true
+          pip3 install datasets piq pillow || true
           cd executorch && pip3 install -e . || pip3 install executorch
-          python3 -c "import mtk_converter, torch, datasets; print('mtk_converter OK, torch', torch.__version__)"
+          # 最后再锁一次：上面的依赖会把 tokenizers 升到 0.2x，必须压回 <0.21
+          pip3 install --force-reinstall --no-deps "tokenizers==0.20.3" "transformers==4.46.3"
+          python3 -c "
+import transformers, tokenizers, mtk_converter, torch, datasets
+print('transformers', transformers.__version__)
+print('tokenizers', tokenizers.__version__)
+print('torch', torch.__version__)
+print('mtk_converter OK')
+"
 
       - name: 下载 Qwen3-4B 权重
         run: |
