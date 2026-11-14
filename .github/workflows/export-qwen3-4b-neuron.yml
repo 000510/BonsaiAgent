@@ -72,8 +72,12 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip setuptools wheel
           # MediaTek 两个转换工具（cp310，系统自带 Python 3.10 正好匹配）
-          pip3 install $HOME/sdk/mtk_neuron.whl
-          pip3 install $HOME/sdk/mtk_converter.whl
+          # 注意：pip 校验 wheel 文件名，必须先还原成标准命名
+          cd $HOME/sdk
+          cp mtk_neuron.whl "mtk_neuron-8.2.23-py3-none-linux_x86_64.whl"
+          cp mtk_converter.whl "mtk_converter-8.13.0+public-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+          pip3 install "./mtk_neuron-8.2.23-py3-none-linux_x86_64.whl"
+          pip3 install "./mtk_converter-8.13.0+public-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
           # torch CPU 版，减小体积
           pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip3 install huggingface_hub transformers safetensors sentencepiece accelerate
