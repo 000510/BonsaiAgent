@@ -11,8 +11,8 @@ on:
         description: "模型：Qwen3-1.7B 或 Qwen3-4B"
         default: "Qwen3-1.7B"
       chunks:
-        description: "num_chunks（切得越多单块内存越小）"
-        default: "8"
+        description: "num_chunks（必须整除层数：1.7B=28层→4/7/14；4B=36层→4/6/9/12）"
+        default: "7"
       tokens:
         description: "prompt_num_tokens"
         default: "128"
