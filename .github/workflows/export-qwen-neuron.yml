@@ -22,6 +22,9 @@ on:
       precision:
         description: "precision"
         default: "A16W4"
+      calibration:
+        description: "校准数据：alpaca.txt / llama3.txt / None"
+        default: "alpaca.txt"
       platform:
         description: "platform: DX3=Dimensity9300(你的机), DX4=Dimensity9400"
         default: "DX3"
@@ -129,7 +132,7 @@ jobs:
             ${{ github.event.inputs.chunks }} \
             ${{ github.event.inputs.tokens }} \
             ${{ github.event.inputs.cache }} \
-            None \
+            ${{ github.event.inputs.calibration }} \
             ${{ github.event.inputs.precision }} \
             ${{ github.event.inputs.platform }}
           echo "exit=$?"
