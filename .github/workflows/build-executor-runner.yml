@@ -67,6 +67,15 @@ jobs:
           ./mtk_build.sh
           ls -d $GITHUB_WORKSPACE/executorch/cmake-android-out
 
+      - name: 安装 Python 编译依赖
+        run: |
+          sudo apt-get install -y -qq python3-pip
+          python3 -m pip install --upgrade pip
+          pip3 install torch --index-url https://download.pytorch.org/whl/cpu
+          pip3 install pyyaml numpy flatbuffers
+          cd executorch && pip3 install -e . --no-build-isolation || pip3 install executorch
+          python3 -c "import executorch, torchgen; print('executorch ok')" || echo "torchgen 仍缺失，继续"
+
       - name: 编译 examples（含 executor_runner）
         run: |
           cd executorch/examples/mediatek
