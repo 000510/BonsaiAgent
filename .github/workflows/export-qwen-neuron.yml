@@ -26,6 +26,9 @@ on:
         description: "platform: DX3=Dimensity9300(你的机), DX4=Dimensity9400"
         default: "DX3"
 
+permissions:
+  contents: write
+
 jobs:
   export:
     runs-on: ubuntu-22.04
@@ -158,8 +161,8 @@ jobs:
         run: |
           ls -lh out/
           TAG="qwen-$(date +%Y%m%d-%H%M)"
-          gh release create "$TAG" --title "$TAG" --notes "Qwen3 NPU export (${{ github.event.inputs.model }}, ${{ github.event.inputs.platform }})" out/* ||           gh release create "$TAG" --title "$TAG" out/* || true
-          gh release view "$TAG" || true
+          gh release create "$TAG" -R ${{ github.repository }} --title "$TAG" --notes "Qwen3 NPU export (${{ github.event.inputs.model }}, ${{ github.event.inputs.platform }})" out/* ||           gh release create "$TAG" -R ${{ github.repository }} --title "$TAG" out/* || true
+          gh release view "$TAG" -R ${{ github.repository }} || true
 
       - uses: actions/upload-artifact@v4
         if: always()
