@@ -87,7 +87,7 @@ jobs:
       - name: 收集产物
         run: |
           mkdir -p out
-          find executorch/cmake-android-out -name "executor_runner*" -exec cp -v {} out/ \; || true
+          find executorch/cmake-android-out -maxdepth 4 -type f -name "*runner*" ! -name "*.o" ! -name "*.d" -exec cp -v {} out/ \; || true
           find executorch/cmake-android-out -name "*.so" -exec cp -v {} out/ \; || true
           ls -lh out/ || echo "无产物"
 
