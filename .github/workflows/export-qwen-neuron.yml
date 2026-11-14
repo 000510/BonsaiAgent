@@ -149,8 +149,11 @@ jobs:
         run: |
           mkdir -p out
           echo "--- 搜索生成文件 ---"
-          find executorch/examples/mediatek -type f \( -name "*.pte" -o -name "*.dlc" \) -exec ls -lh {} \; | head -20
-          find executorch/examples/mediatek -type f \( -name "*.pte" -o -name "*.dlc" \) -exec cp -v {} out/ \; || true
+          D=$(dirname $(find executorch/examples/mediatek -name "*.pte" | head -1))
+          echo "PTE_DIR=$D"
+          ls -lh "$D"
+          cp -v "$D"/* out/ || true
+          cp -v executorch/examples/mediatek/shell_scripts/run_*.sh out/ 2>/dev/null || true
           ls -lh out/ || echo "无产物"
 
 
