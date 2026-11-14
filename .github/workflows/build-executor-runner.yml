@@ -1,0 +1,91 @@
+name: build-executor-runner
+
+# 编译 Android 上真正跑模型的程序 executor_runner（arm64-v8a）
+# 依据：executorch/examples/mediatek/README.md「Build MediaTek Runners」
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+
+    steps:
+      - name: 环境自检
+        run: |
+          python3 -V; df -h /; free -g; nproc
+
+      - name: 释放磁盘空间
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git wget curl unzip ninja-build cmake build-essential
+
+      - name: 安装 Android NDK 26.3
+        run: |
+          NDK=android-ndk-r26d
+          wget -q "https://dl.google.com/android/repository/${NDK}-linux.zip"
+          unzip -q "${NDK}-linux.zip"
+          echo "ANDROID_NDK=$PWD/${NDK}" >> $GITHUB_ENV
+
+      - name: 拉取 SDK 库文件
+        run: |
+          mkdir -p $HOME/sdk
+          BASE="https://github.com/${{ github.repository }}/releases/download/sdk"
+          curl -sSL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -o $HOME/sdk/sdk_libs.tar.gz "$BASE/sdk_libs.tar.gz"
+          tar -xzf $HOME/sdk/sdk_libs.tar.gz -C $HOME/sdk
+          find $HOME/sdk -type f | head
+
+      - name: 克隆 ExecuTorch
+        run: |
+          git clone --depth 1 --recursive --shallow-submodules \
+            https://github.com/pytorch/executorch.git
+          du -sh executorch
+
+      - name: 放置 NeuronAdapter.h
+        run: |
+          mkdir -p executorch/backends/mediatek/runtime/include/api
+          cp $(find $HOME/sdk -name "NeuronAdapter.h" | head -1) \
+             executorch/backends/mediatek/runtime/include/api/
+          ls -l executorch/backends/mediatek/runtime/include/api/
+
+      - name: 编译 examples（含 executor_runner）
+        run: |
+          cd executorch/examples/mediatek
+          chmod +x mtk_build_examples.sh
+          ./mtk_build_examples.sh
+          echo "=== 产物 ==="
+          find $GITHUB_WORKSPACE/executorch/cmake-android-out -maxdepth 3 -type f -executable | head -20
+
+      - name: 收集产物
+        run: |
+          mkdir -p out
+          find executorch/cmake-android-out -name "executor_runner*" -exec cp -v {} out/ \; || true
+          find executorch/cmake-android-out -name "*.so" -exec cp -v {} out/ \; || true
+          ls -lh out/ || echo "无产物"
+
+      - name: 上传到 Release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="runner-$(date +%Y%m%d-%H%M)"
+          gh release create "$TAG" -R ${{ github.repository }} --title "$TAG" --notes "executor_runner arm64" out/* || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: executor-runner-arm64
+          path: out/
+          if-no-files-found: warn
