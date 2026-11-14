@@ -153,7 +153,12 @@ jobs:
           echo "PTE_DIR=$D"
           ls -lh "$D"
           cp -v "$D"/* out/ || true
-          cp -v executorch/examples/mediatek/shell_scripts/run_*.sh out/ 2>/dev/null || true
+          # embedding 表（导出时写在 weights 目录，运行必需）
+          W="executorch/examples/mediatek/models/llm_models/weights/${{ github.event.inputs.model }}"
+          ls -lh "$W" | head -20
+          cp -v "$W"/embedding_*.bin out/ 2>/dev/null || echo "未找到 embedding bin"
+          # 运行脚本
+          cp -v executorch/examples/mediatek/executor_runner/run_qwen3_sample.sh out/ 2>/dev/null || true
           ls -lh out/ || echo "无产物"
 
 
