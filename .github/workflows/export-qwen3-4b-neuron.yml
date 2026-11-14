@@ -80,7 +80,10 @@ jobs:
           pip3 install "./mtk_converter-8.13.0+public-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
           # torch CPU 版，减小体积
           pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip3 install huggingface_hub transformers safetensors sentencepiece accelerate
+          # 锁版本：ExecuTorch 的 tokenizer fork 依赖老版 transformers 的 SpecialTokensMixin，
+          # 新版 transformers 已移除该导入路径
+          pip3 install "transformers==4.46.3" "tokenizers==0.20.3" "huggingface_hub" \
+                       safetensors sentencepiece accelerate
           # 官方导出脚本依赖（datasets 必须，否则 qwen.py 直接 ModuleNotFoundError）
           if [ -f executorch/examples/mediatek/requirements.txt ]; then
             pip3 install -r executorch/examples/mediatek/requirements.txt || echo "部分依赖失败，继续"
