@@ -60,6 +60,13 @@ jobs:
              executorch/backends/mediatek/runtime/include/api/
           ls -l executorch/backends/mediatek/runtime/include/api/
 
+      - name: 先编后端库（生成 cmake-android-out）
+        run: |
+          cd executorch/backends/mediatek/scripts
+          chmod +x mtk_build.sh
+          ./mtk_build.sh
+          ls -d $GITHUB_WORKSPACE/executorch/cmake-android-out
+
       - name: 编译 examples（含 executor_runner）
         run: |
           cd executorch/examples/mediatek
