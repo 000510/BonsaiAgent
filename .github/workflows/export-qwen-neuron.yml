@@ -11,8 +11,8 @@ on:
         description: "模型：Qwen3-1.7B 或 Qwen3-4B"
         default: "Qwen3-1.7B"
       chunks:
-        description: "num_chunks"
-        default: "4"
+        description: "num_chunks（切得越多单块内存越小）"
+        default: "8"
       tokens:
         description: "prompt_num_tokens"
         default: "128"
@@ -48,7 +48,7 @@ jobs:
         run: |
           sudo swapoff /swapfile 2>/dev/null || true
           sudo rm -f /swapfile
-          sudo dd if=/dev/zero of=/swapfile bs=1M count=16384 status=none
+          sudo dd if=/dev/zero of=/swapfile bs=1M count=32768 status=none
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile >/dev/null
           sudo swapon /swapfile
