@@ -47,9 +47,11 @@ jobs:
 
       - name: 增加 swap（4B 模型导出内存吃紧）
         run: |
-          sudo fallocate -l 24G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=24576
+          sudo swapoff /swapfile 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo dd if=/dev/zero of=/swapfile bs=1M count=8192 status=none
           sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
+          sudo mkswap /swapfile >/dev/null
           sudo swapon /swapfile
           free -g
           swapon --show
