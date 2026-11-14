@@ -23,8 +23,8 @@ on:
         description: "precision"
         default: "A16W4"
       platform:
-        description: "platform"
-        default: "DX4"
+        description: "platform: DX3=Dimensity9300(你的机), DX4=Dimensity9400"
+        default: "DX3"
 
 jobs:
   export:
@@ -118,7 +118,10 @@ jobs:
       - name: 导出 .pte / .dlc
         run: |
           cd executorch/examples/mediatek
+          export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4
           echo "=== 导出前内存 ==="; free -g
+          ( while true; do echo "[mem $(date +%T)] $(free -m | awk '/Mem:/{print "used="$3"MB avail="$7"MB"}') swap_used=$(free -m | awk '/Swap:/{print $3}')MB"; sleep 20; done ) &
+          MON=$!
           bash shell_scripts/export_qwen.sh ${{ github.event.inputs.model }} \
             ${{ github.event.inputs.chunks }} \
             ${{ github.event.inputs.tokens }} \
@@ -127,6 +130,7 @@ jobs:
             ${{ github.event.inputs.precision }} \
             ${{ github.event.inputs.platform }}
           echo "exit=$?"
+          kill $MON 2>/dev/null || true
           echo "=== 导出后内存 ==="; free -g
 
       - name: OOM 诊断
