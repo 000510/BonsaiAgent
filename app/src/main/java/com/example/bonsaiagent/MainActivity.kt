@@ -10,19 +10,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountTree
-import androidx.compose.material.icons.filled.ChatBubble
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.AccountTree
-import androidx.compose.material.icons.outlined.AddComment
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -48,12 +39,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // 未捕获异常落盘，闪退也能拿到堆栈
         CrashCatcher.install(applicationContext)
 
-        // 主动触发 ViewModel 创建：如果它的 init 抛异常，这里能接住并把错误显示出来，
-        // 而不是黑屏 0.5 秒直接退出、什么信息都留不下。
+        // 主动触发 ViewModel 创建，失败就把堆栈显示出来（而不是黑屏后直接退出）
         val bootError: String? = try {
             vm
             null
@@ -66,10 +54,7 @@ class MainActivity : ComponentActivity() {
         if (bootError != null) {
             setContent {
                 BonsaiTheme {
-                    Surface(
-                        Modifier.fillMaxSize(),
-                        color = MaterialTheme.colorScheme.background
-                    ) {
+                    Surface(Modifier.fillMaxSize()) {
                         Column(Modifier.padding(16.dp)) {
                             Text(
                                 "启动失败",
@@ -77,11 +62,7 @@ class MainActivity : ComponentActivity() {
                                 fontSize = 16.sp,
                                 color = MaterialTheme.colorScheme.error
                             )
-                            Text(
-                                bootError,
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
+                            Text(bootError, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
@@ -100,78 +81,45 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private data class TabItem(
-    val title: String,
-    val iconOn: ImageVector,
-    val iconOff: ImageVector
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
-    val cs = MaterialTheme.colorScheme
-    val loaded = vm.modelLoaded.value
+    val titles = listOf("对话", "路由 / Agent", "设置")
     val ctx = LocalContext.current
     val ver = remember {
         runCatching {
             ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
-        }.getOrNull() ?: "?"
+        }.getOrNull() ?: ""
     }
 
-    val tabs = listOf(
-        TabItem("对话", Icons.Filled.ChatBubble, Icons.Outlined.ChatBubbleOutline),
-        TabItem("路由", Icons.Filled.AccountTree, Icons.Outlined.AccountTree),
-        TabItem("设置", Icons.Filled.Settings, Icons.Outlined.Settings)
-    )
-
     Scaffold(
-        containerColor = cs.background,
         topBar = {
-            CenterAlignedTopAppBar(
+            TopAppBar(
                 title = {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            "BonsaiAgent",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 17.sp
-                        )
-                        Text(
-                            "v$ver · " + (if (loaded) "模型已就绪" else "未加载模型"),
-                            fontSize = 11.sp,
-                            color = if (loaded) cs.primary else cs.onSurfaceVariant
-                        )
-                    }
-                },
-                actions = {
-                    // 新会话：只清对话列表，不用退出 App（设置页不显示）
-                    if (tab != 2) {
-                        IconButton(onClick = { vm.newSession() }) {
-                            Icon(
-                                imageVector = Icons.Outlined.AddComment,
-                                contentDescription = "新会话"
-                            )
+                    Column {
+                        Text("BonsaiAgent")
+                        if (ver.isNotEmpty()) {
+                            Text("v$ver", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = cs.surface
-                )
+                actions = {
+                    // 新会话：只清对话列表，不用退出 App
+                    if (tab != 2) {
+                        TextButton(onClick = { vm.newSession() }) { Text("新会话") }
+                    }
+                }
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = cs.surface) {
-                tabs.forEachIndexed { i, item ->
+            NavigationBar {
+                titles.forEachIndexed { i, t ->
                     NavigationBarItem(
                         selected = tab == i,
                         onClick = { tab = i },
-                        icon = {
-                            Icon(
-                                imageVector = if (tab == i) item.iconOn else item.iconOff,
-                                contentDescription = item.title
-                            )
-                        },
-                        label = { Text(item.title, fontSize = 11.sp) }
+                        label = { Text(t) },
+                        icon = { }
                     )
                 }
             }
