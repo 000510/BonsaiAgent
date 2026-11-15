@@ -459,9 +459,41 @@ static void ggml_fatal_cb(const char * msg) {
     if (g_prev_abort_cb) g_prev_abort_cb(msg);
 }
 
+// ============================================================================
+// v10.72：投机解码（speculative decoding）
+//
+// 手机端推理是**内存带宽瓶颈**：生成一个 token 要用好几 GB/s 的带宽把权重读一遍。
+// 投机解码不改模型、不改量化，而是「一次读权重，验多个 token」：
+//   1) 小的草稿模型（0.6B）先自回归猜 γ 个 token —— 它几乎不占带宽；
+//   2) 主模型（4B）把这些候选**一次性** batch 前向，只读一遍权重；
+//   3) 逐个比对主模型自己的采样结果，猜对的全部采纳，第一个不对的用主模型的值替换。
+//
+// 关键点：每个 token 都是**主模型按自己的分布采样**出来的，所以输出质量与
+// 不开投机时等价（不是拿草稿模型的输出凑数）。
+//
+// 前提：草稿模型和主模型必须共用同一套词表（Qwen3 全系 151936，天然满足），
+// 否则 token id 不能互用。initDraft 里会校验，不一致直接拒绝。
+// ============================================================================
+struct DraftCtx {
+    llama_model*   model = nullptr;
+    llama_context* ctx   = nullptr;
+    llama_sampler* smpl  = nullptr;
+
+    // draft 侧已吃进的完整 token 序列。每块开始前与主模型对齐：
+    // 求公共前缀 → 截断 KV → 补算新增。主模型拒绝候选后，这里会自动回退。
+    std::vector<llama_token> seq;
+    int  n_past    = 0;
+    int  max_draft = 6;      // γ：每块猜几个
+    long n_prop    = 0;      // 累计候选数
+    long n_acc     = 0;      // 累计被采纳数
+};
+
 struct LlamaState {
     llama_model*   model;
     llama_context* ctx;
+
+    // v10.72：草稿模型（可为空，为空时走原来的单 token 路径）
+    DraftCtx* draft = nullptr;
 
     // v8.0 KV 前缀缓存（"汤底复用"）：
     // system prompt 每轮完全相同，却要每轮重新 prefill —— 实测占单轮 15 秒里的 14 秒。
@@ -576,6 +608,107 @@ static void ensure_backend() {
     if (nreg == 0) {
         g_lastError = "没有加载到任何 CPU 后端（动态库 dlopen 失败）";
     }
+}
+
+// ---------------------------------------------------------------------------
+// v10.72 投机解码：草稿侧工具
+// ---------------------------------------------------------------------------
+
+// 建一条与主模型口径一致的采样器链（惩罚 → top_k → temp → top_p → dist）。
+// 口径必须一致，否则草稿猜出来的分布和主模型差太远，接受率会掉到个位数。
+static llama_sampler* make_sampler(int n_vocab, float temp, int top_k, float top_p,
+                                   float rep_pen, uint32_t seed) {
+    llama_sampler* s = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    if (!s) return nullptr;
+    if (rep_pen > 1.0001f) {
+        llama_sampler_chain_add(s, llama_sampler_init_penalties(n_vocab, 64, rep_pen, 0.0f, 0.0f));
+    }
+    if (top_k > 0) llama_sampler_chain_add(s, llama_sampler_init_top_k(top_k));
+    if (temp > 0.0001f) llama_sampler_chain_add(s, llama_sampler_init_temp(temp));
+    if (top_p > 0.0f && top_p < 0.999f) {
+        llama_sampler_chain_add(s, llama_sampler_init_top_p(top_p, 1));
+    }
+    llama_sampler_chain_add(s, llama_sampler_init_dist(seed));
+    return s;
+}
+
+// 主模型单 token 前向（显式 pos）。
+// 原代码用的是 llama_batch_get_one()，位置靠 ctx 内部 n_past 推断 ——
+// 投机时必须能精确回退 KV，内部计数不可信，一律显式给 pos。
+static bool decode_one(llama_context* ctx, llama_token tok, int pos) {
+    if (!ctx || tok < 0) return false;
+    llama_batch b = llama_batch_init(1, 0, 1);
+    b.token[0]     = tok;
+    b.pos[0]       = (llama_pos) pos;
+    b.n_seq_id[0]  = 1;
+    b.seq_id[0][0] = 0;
+    b.logits[0]    = 1;
+    b.n_tokens     = 1;
+    int rc = llama_decode(ctx, b);
+    llama_batch_free(b);
+    return rc == 0;
+}
+
+// 把草稿模型的 KV 对齐到 target 序列：公共前缀之后的全部丢掉重算。
+// 主模型一旦拒绝某个候选，这里就会自动把草稿侧多走的那几步回退掉。
+static bool draft_sync(DraftCtx* d, const std::vector<llama_token>& target) {
+    if (!d || !d->ctx) return false;
+    size_t L = 0;
+    const size_t lim = std::min(target.size(), d->seq.size());
+    while (L < lim && target[L] == d->seq[L]) L++;
+
+    llama_memory_t mem = llama_get_memory(d->ctx);
+    if (mem) llama_memory_seq_rm(mem, 0, (llama_pos) L, -1);
+
+    int i = (int) L;
+    const int total = (int) target.size();
+    while (i < total) {
+        int chunk = std::min(total - i, 64);
+        llama_batch b = llama_batch_init(chunk, 0, 1);
+        for (int k = 0; k < chunk; k++) {
+            b.token[k]     = target[(size_t) (i + k)];
+            b.pos[k]       = (llama_pos) (i + k);
+            b.n_seq_id[k]  = 1;
+            b.seq_id[k][0] = 0;
+            b.logits[k]    = ((i + k) == total - 1) ? 1 : 0;
+        }
+        b.n_tokens = chunk;
+        int rc = llama_decode(d->ctx, b);
+        llama_batch_free(b);
+        if (rc != 0) return false;
+        i += chunk;
+    }
+    d->seq    = target;
+    d->n_past = total;
+    return true;
+}
+
+// 草稿模型采样一个 token 并推进（pos 由调用方指定，与主模型严格同位置）
+static llama_token draft_step(DraftCtx* d, int pos) {
+    if (!d || !d->ctx || !d->smpl) return -1;
+    llama_token t = llama_sampler_sample(d->smpl, d->ctx, -1);
+    if (t < 0) return -1;
+    llama_batch b = llama_batch_init(1, 0, 1);
+    b.token[0]     = t;
+    b.pos[0]       = (llama_pos) pos;
+    b.n_seq_id[0]  = 1;
+    b.seq_id[0][0] = 0;
+    b.logits[0]    = 1;
+    b.n_tokens     = 1;
+    int rc = llama_decode(d->ctx, b);
+    llama_batch_free(b);
+    if (rc != 0) return -1;
+    d->seq.push_back(t);
+    d->n_past = pos + 1;
+    return t;
+}
+
+static void draft_free(DraftCtx* d) {
+    if (!d) return;
+    if (d->smpl)  llama_sampler_free(d->smpl);
+    if (d->ctx)   llama_free(d->ctx);
+    if (d->model) llama_model_free(d->model);
+    delete d;
 }
 
 static jlong fail(const char* stage) {
@@ -746,6 +879,91 @@ Java_com_example_bonsaiagent_llm_Llama_init(
              llama_n_threads(ctx), mem_available_mb());
     set_stage("idle");
     return reinterpret_cast<jlong>(st);
+}
+
+// ---- v10.72 加载草稿模型 ----
+// 传空串或 "none" 表示不启用投机解码（走原来的单 token 路径）。
+// 返回 false 不代表主模型不可用 —— 只是这一路加速没开成，日志里有原因。
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_bonsaiagent_llm_Llama_initDraft(
+        JNIEnv* env, jobject, jlong handle, jstring jpath, jint n_threads, jint max_draft) {
+
+    auto* st = reinterpret_cast<LlamaState*>(handle);
+    if (!st || !st->ctx || !st->model) {
+        g_lastError = "主模型未加载，无法挂草稿模型";
+        return JNI_FALSE;
+    }
+
+    if (st->draft) { draft_free(st->draft); st->draft = nullptr; }
+
+    const char* path = env->GetStringUTFChars(jpath, nullptr);
+    std::string spath(path ? path : "");
+    env->ReleaseStringUTFChars(jpath, path);
+    if (spath.empty() || spath == "none") {
+        log_line("草稿模型：未启用（走单 token 路径）");
+        return JNI_TRUE;
+    }
+
+    struct stat fst{};
+    if (::stat(spath.c_str(), &fst) != 0 || fst.st_size < 1024 * 1024) {
+        g_lastError = "草稿模型不存在或文件不完整: " + spath;
+        return JNI_FALSE;
+    }
+
+    long mem = mem_available_mb();
+    if (mem > 0 && mem < 700) {
+        g_lastError = "可用内存只剩 " + std::to_string(mem) + " MB，先关掉后台应用再开加速";
+        return JNI_FALSE;
+    }
+
+    llama_model_params dp = llama_model_default_params();
+    dp.n_gpu_layers = 0;
+    llama_model* dm = llama_model_load_from_file(spath.c_str(), dp);
+    if (!dm) {
+        g_lastError = "草稿模型加载失败（不是有效的 gguf？）";
+        return JNI_FALSE;
+    }
+
+    // 词表必须完全一致，否则 token id 不能互用，投机出来的全是乱码
+    const llama_vocab* v1 = llama_model_get_vocab(st->model);
+    const llama_vocab* v2 = llama_model_get_vocab(dm);
+    const int nv1 = v1 ? llama_vocab_n_tokens(v1) : 0;
+    const int nv2 = v2 ? llama_vocab_n_tokens(v2) : 0;
+    if (nv1 != nv2) {
+        g_lastError = "词表不一致（主 " + std::to_string(nv1) + " / 草稿 " +
+                      std::to_string(nv2) + "），这两个模型不能配对";
+        llama_model_free(dm);
+        return JNI_FALSE;
+    }
+
+    llama_context_params dc = llama_context_default_params();
+    dc.n_ctx           = (uint32_t) llama_n_ctx(st->ctx);
+    dc.n_batch         = 64;
+    dc.n_ubatch        = 64;
+    dc.type_k          = GGML_TYPE_Q8_0;
+    dc.type_v          = GGML_TYPE_Q8_0;
+    const int nth      = n_threads > 0 ? (n_threads > 4 ? 4 : n_threads) : 4;
+    dc.n_threads       = (uint32_t) nth;
+    dc.n_threads_batch = (uint32_t) nth;
+
+    llama_context* dctx = llama_init_from_model(dm, dc);
+    if (!dctx) {
+        g_lastError = "草稿上下文创建失败（内存不足，先关后台应用）";
+        llama_model_free(dm);
+        return JNI_FALSE;
+    }
+    llama_set_n_threads(dctx, (uint32_t) nth, (uint32_t) nth);
+
+    auto* d = new DraftCtx();
+    d->model        = dm;
+    d->ctx          = dctx;
+    d->max_draft    = max_draft > 0 ? (max_draft > 12 ? 12 : max_draft) : 6;
+    st->draft       = d;
+
+    log_line("草稿模型就绪：%s", spath.c_str());
+    log_line("  投机参数 γ=%d 词表=%d n_ctx=%u 线程=%d，可用内存 %ld MB",
+             d->max_draft, nv1, dc.n_ctx, nth, mem_available_mb());
+    return JNI_TRUE;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -1009,38 +1227,44 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     int n_past = n_past_base + n_tok;
     char buf[512];
 
+    // ========================= v10.72 投机解码 =========================
+    // 草稿模型每轮重建采样器（种子随机），否则每轮都会猜成一样的词。
+    DraftCtx* draft = st->draft;
+    bool useDraft = (draft && draft->ctx && draft->model && draft->max_draft > 0);
+    if (useDraft) {
+        if (draft->smpl) { llama_sampler_free(draft->smpl); draft->smpl = nullptr; }
+        static std::mt19937 drng{ std::random_device{}() };
+        uint32_t dseed = (uint32_t) (drng() ^ (uint32_t) std::chrono::steady_clock::now()
+                                     .time_since_epoch().count());
+        draft->smpl = make_sampler(n_vocab, temp, top_k, top_p, rep_pen, dseed);
+        if (!draft->smpl) {
+            useDraft = false;
+        } else {
+            // 草稿侧 KV 对齐到 prompt（第二轮起前缀基本全命中，只补几个 token）
+            std::vector<llama_token> pre(tokens.begin(), tokens.end());
+            if (!draft_sync(draft, pre)) {
+                log_line("草稿 KV 对齐失败，本次退回单 token 路径");
+                useDraft = false;
+            }
+        }
+    }
+    if (useDraft) {
+        log_line("投机解码：开启 γ=%d（草稿模型已就绪）", draft->max_draft);
+    } else {
+        log_line("投机解码：关闭（没挂草稿模型或初始化失败）");
+    }
+
     auto tg0 = std::chrono::steady_clock::now();
     int n_gen = 0;
     std::vector<llama_token> genToks;   // v10.14：记下生成内容，供下一轮续接判断
 
-    for (int i = 0; i < budget; i++) {
-        // v6.6：把当前 token 序号写进 stage。
-        // 崩溃时信号处理器会带上 stage，等于告诉我们精确崩在生成的第几个 token。
-        {
-            char sb[32];
-            snprintf(sb, sizeof(sb), "gen:%d", i);
-            set_stage(sb);
-        }
-        if (i % 4 == 0) {
-            log_line("生成中… 第 %d 个 token，可用内存 %ld MB", i, mem_available_mb());
-        }
-        llama_token next = llama_sampler_sample(smpl, st->ctx, -1);
-
-        // v3.4 诊断：前 6 个 token 全部记下来，看清是"结束符"还是"空 piece"
-        if (i < 6) {
-            int is_eog = llama_vocab_is_eog(vocab, next);
-            char db[64] = {0};
-            int dl = llama_token_to_piece(vocab, next, db, (int32_t) sizeof(db) - 1, 0, false);
-            log_line("token[%d] id=%d eog=%d piece_len=%d piece=[%.*s]",
-                     i, next, is_eog, dl, dl > 0 ? dl : 0, dl > 0 ? db : "");
-        }
-
-        if (next < 0) { log_line("!! 采样返回负数 id=%d，中止", next); break; }
+    // 输出一个 token：转 UTF-8、喂回调、记进 genToks。返回 1 表示要中断。
+    auto emit = [&](llama_token next, int idx) -> int {
+        if (next < 0) { log_line("!! 采样返回负数 id=%d，中止", next); return 1; }
         if (llama_vocab_is_eog(vocab, next)) {
-            log_line("!! 第 %d 个 token 遇到结束符 id=%d，本次共生成 %zu 字节", i, next, full.size());
-            break;
+            log_line("!! 第 %d 个 token 遇到结束符 id=%d，本次共生成 %zu 字节", idx, next, full.size());
+            return 1;
         }
-
         int len = llama_token_to_piece(vocab, next, buf, (int32_t) sizeof(buf), 0, false);
         if (len > 0) {
             // 累积字节，只把凑完整的 UTF-8 字符交给上层 —— 见 take_complete_utf8 说明
@@ -1055,16 +1279,125 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
                 }
             }
         }
-
         genToks.push_back(next);
-        llama_batch tb = llama_batch_get_one(&next, 1);
-        if (llama_decode(st->ctx, tb) != 0) {
-            g_lastError = "decode 失败";
-            log_line("[失败] decode 第 %d 个 token", i);
+        return 0;
+    };
+
+    llama_token pending = -1;               // 已采样、还没送进 KV 的 token（下一块的头一个）
+    std::vector<llama_token> cand;          // 本块草稿候选
+    std::vector<llama_token> dtarget;       // 草稿侧对齐目标（复用容器，少分配）
+
+    while (n_gen < budget) {
+        // v6.6：把当前 token 序号写进 stage，崩溃时能精确定位
+        {
+            char sb[32];
+            snprintf(sb, sizeof(sb), "gen:%d", n_gen);
+            set_stage(sb);
+        }
+        if (n_gen % 4 == 0) {
+            log_line("生成中… 第 %d 个 token，可用内存 %ld MB", n_gen, mem_available_mb());
+        }
+
+        // ① 本块第一个 token：上一块遗留下来的，或现场采样
+        llama_token t0;
+        if (pending >= 0) { t0 = pending; pending = -1; }
+        else               t0 = llama_sampler_sample(smpl, st->ctx, -1);
+
+        if (t0 < 0) { log_line("!! 采样返回负数 id=%d，中止", t0); break; }
+        if (llama_vocab_is_eog(vocab, t0)) {
+            log_line("!! 第 %d 个 token 是结束符 id=%d，本次共生成 %zu 字节",
+                     n_gen, t0, full.size());
             break;
         }
-        n_past++;
-        n_gen++;
+
+        // ② 草稿模型猜 γ 个（t0 之后）
+        cand.clear();
+        const int room = budget - n_gen - 1;
+        if (useDraft && room > 0) {
+            dtarget.assign(tokens.begin(), tokens.end());
+            dtarget.insert(dtarget.end(), genToks.begin(), genToks.end());
+            dtarget.push_back(t0);
+            if (!draft_sync(draft, dtarget)) {
+                useDraft = false;
+                log_line("草稿 KV 同步失败，本次改走单 token 路径");
+            } else {
+                // 上下文余量也要算进去：t0 占一个位置，候选不能把 n_ctx 撑爆
+                const int space = n_ctx - 1 - (n_past + 1);
+                const int want = std::min(std::min(room, draft->max_draft), std::max(0, space));
+                for (int g = 0; g < want; g++) {
+                    llama_token c = draft_step(draft, n_past + 1 + g);
+                    if (c < 0 || llama_vocab_is_eog(vocab, c)) break;
+                    cand.push_back(c);
+                }
+            }
+        }
+
+        // ③ 主模型一次 batch 前向：t0 + 全部候选（只读一遍权重 —— 这就是提速的来源）
+        const int bn = 1 + (int) cand.size();
+        llama_batch bb = llama_batch_init(bn, 0, 1);
+        for (int k = 0; k < bn; k++) {
+            bb.token[k]     = (k == 0) ? t0 : cand[(size_t) (k - 1)];
+            bb.pos[k]       = (llama_pos) (n_past + k);
+            bb.n_seq_id[k]  = 1;
+            bb.seq_id[k][0] = 0;
+            bb.logits[k]    = 1;
+        }
+        bb.n_tokens = bn;
+        const int rcD = llama_decode(st->ctx, bb);
+        llama_batch_free(bb);
+        if (rcD != 0) {
+            g_lastError = "decode 失败";
+            log_line("[失败] batch decode（bn=%d）", bn);
+            break;
+        }
+
+        // ④ 逐个比对：主模型自己采样出来的值 == 草稿猜的，就采纳
+        int accepted = 0;
+        llama_token finalTok = -1;
+        for (int j = 1; j <= (int) cand.size(); j++) {
+            llama_token v = llama_sampler_sample(smpl, st->ctx, j - 1);
+            if (v == cand[(size_t) (j - 1)]) accepted++;
+            else { finalTok = v; break; }
+        }
+        if (accepted == (int) cand.size()) {
+            // 全中：用最后一个位置的 logits 额外采一个，等于白赚
+            finalTok = llama_sampler_sample(smpl, st->ctx, bn - 1);
+        }
+
+        // ⑤ KV 回退：只保留 t0 和被采纳的那几个，多算的位置全部删掉
+        const int keep_end = n_past + 1 + accepted;
+        if (keep_end < n_past + bn) {
+            llama_memory_t m = llama_get_memory(st->ctx);
+            const bool okRm = (m == nullptr) ? true
+                              : llama_memory_seq_rm(m, 0, (llama_pos) keep_end, -1);
+            if (!okRm) {
+                log_line("!! KV 回退失败（keep_end=%d），停止本次生成以免输出错乱", keep_end);
+                break;
+            }
+        }
+        n_past = keep_end;
+
+        // ⑥ 按顺序吐出来（t0 一定是主模型采样的，保证开头正确）
+        bool stop = false;
+        if (emit(t0, n_gen) != 0) stop = true;
+        else {
+            n_gen++;
+            for (int j = 0; j < accepted; j++) {
+                if (emit(cand[(size_t) j], n_gen) != 0) { stop = true; break; }
+                n_gen++;
+                if (n_gen >= budget) break;
+            }
+        }
+        if (useDraft && !cand.empty()) {
+            draft->n_prop += (long) cand.size();
+            draft->n_acc  += (long) accepted;
+        }
+        if (stop) break;
+
+        // ⑦ 下一个 token 留着下一块用（它还没进 KV，所以先不吐）
+        pending = finalTok;
+        if (pending < 0) break;
+        if (n_gen >= budget) break;
         if (n_past >= n_ctx - 1) break;
     }
 
@@ -1075,6 +1408,14 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         log_line("生成速度 %.2f tok/s（%d token / %.2f 秒），n_threads=%u",
                  gsec > 0 ? n_gen / gsec : 0.0, n_gen, gsec,
                  llama_n_threads(st->ctx));
+        // v10.72：投机是否真的在干活，只看这一个数 —— 接受率低于 35% 就说明
+        // 草稿模型跟主模型脾气差太多，提速会被自己的开销吃掉。
+        if (draft && draft->n_prop > 0) {
+            log_line("投机统计：候选 %ld 个，采纳 %ld 个（接受率 %.0f%%），γ=%d",
+                     draft->n_prop, draft->n_acc,
+                     100.0 * (double) draft->n_acc / (double) draft->n_prop,
+                     draft->max_draft);
+        }
     }
 
     llama_sampler_free(smpl);
@@ -1099,6 +1440,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_example_bonsaiagent_llm_Llama_freeNative(JNIEnv*, jobject, jlong handle) {
     auto* st = reinterpret_cast<LlamaState*>(handle);
     if (!st) return;
+    if (st->draft) draft_free(st->draft);        // v10.72
     if (st->ctx)   llama_free(st->ctx);
     if (st->model) llama_model_free(st->model);
     delete st;

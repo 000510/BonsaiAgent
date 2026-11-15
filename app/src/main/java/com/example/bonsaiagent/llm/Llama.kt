@@ -39,6 +39,9 @@ object Llama {
                                   maxTokens: Int): String
     private external fun freeNative(handle: Long)
 
+    // v10.72：挂草稿模型（投机解码）。path 传 null/空/"none" = 关闭。
+    private external fun initDraft(handle: Long, path: String, nThreads: Int, maxDraft: Int): Boolean
+
     /** v10.27：把任意路径丢给原生 dlopen，返回 size + 成败 + 真实 dlerror */
     private external fun dlopenProbe(path: String): String
 
@@ -90,6 +93,29 @@ object Llama {
         if (handle != 0L) {
             freeNative(handle)
             handle = 0L
+        }
+    }
+
+    /**
+     * v10.72 投机解码：把草稿模型挂到已加载的主模型上。
+     *
+     * 加速原理：手机推理卡在内存带宽 —— 每生成 1 个 token 就要把权重读一遍。
+     * 投机解码让 0.6B 的草稿模型一次猜 γ 个，主模型**只读一遍权重**就把这 γ 个
+     * 全部验证掉，猜对的直接采纳。每个被采纳的 token 都是白赚的带宽。
+     *
+     * @param path     草稿模型 .gguf 路径（要和主模型共用同一套词表，比如 Qwen3 全系）
+     * @param threads  草稿模型线程数，建议 2~4：它在主模型算的同时不占太多核
+     * @param maxDraft γ，每轮猜几个。6 是手机上的甜点，太大草稿自己就成了瓶颈
+     * @return true = 加速已生效；false = 没挂上（主模型照常能用，原因见 getLastError）
+     */
+    fun loadDraft(path: String?, threads: Int = 4, maxDraft: Int = 6): Boolean {
+        if (handle == 0L) return false
+        val p = if (path.isNullOrBlank()) "none" else path
+        return try {
+            initDraft(handle, p, threads, maxDraft)
+        } catch (t: Throwable) {
+            Log.e(TAG, "挂草稿模型失败: ${t.message}")
+            false
         }
     }
 }

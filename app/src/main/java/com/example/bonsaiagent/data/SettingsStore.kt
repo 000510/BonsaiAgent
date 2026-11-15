@@ -26,7 +26,13 @@ data class AgentSettings(
     val allowDangerous: Boolean = false,
 
     // v10.20：LiteRT 后端（NPU / GPU / CPU）。只在加载 .litertlm 模型时生效。
-    val litertBackend: String = "NPU"
+    val litertBackend: String = "NPU",
+
+    // v10.72：投机解码。草稿模型跟主模型共用词表（Qwen3 全系），
+    // 主模型一次前向验证 γ 个候选，把「读权重的带宽」摊薄，实测能提速 1.4~1.8 倍。
+    val useDraft: Boolean = true,
+    val draftPath: String = "",
+    val draftMax: Int = 6
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述。
@@ -90,6 +96,9 @@ class SettingsStore(context: Context) {
         systemPrompt = sp.getString("systemPrompt", DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT,
         downloadSource = sp.getString("downloadSource", "HF镜像") ?: "HF镜像",
         litertBackend = sp.getString("litertBackend", "NPU") ?: "NPU",
+        useDraft = sp.getBoolean("useDraft", true),
+        draftPath = sp.getString("draftPath", "") ?: "",
+        draftMax = sp.getInt("draftMax", 6),
         apiEnabled = sp.getBoolean("apiEnabled", false),
         deepseekKey = sp.getString("deepseekKey", "") ?: "",
         apiBase = sp.getString("apiBase", "https://api.deepseek.com") ?: "https://api.deepseek.com",
@@ -106,6 +115,9 @@ class SettingsStore(context: Context) {
             putInt("contextSize", s.contextSize)
             putInt("threads", s.threads)
             putString("litertBackend", s.litertBackend)
+            putBoolean("useDraft", s.useDraft)
+            putString("draftPath", s.draftPath)
+            putInt("draftMax", s.draftMax)
             putString("systemPrompt", s.systemPrompt)
             putString("downloadSource", s.downloadSource)
             putBoolean("apiEnabled", s.apiEnabled)

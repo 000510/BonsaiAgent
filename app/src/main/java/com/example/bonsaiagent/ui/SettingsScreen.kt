@@ -106,6 +106,62 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                 }
             }
         }
+        // v10.72：投机解码（草稿模型加速）。手机推理卡在带宽，这一项是目前唯一
+        // 不牺牲模型质量、又能把速度往上抬的开关。
+        Divider(Modifier.padding(vertical = 4.dp))
+        Text("🚀 投机解码（加速）", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "主模型一次前向验证 γ 个候选，把「读一遍权重」的带宽摊薄，猜对的直接采纳。\n" +
+                "硬规矩：草稿模型必须和主模型同家族同词表 —— Qwen3-4B 配 Qwen3-0.6B，" +
+                "体积小 5 倍以上，精度用 Q8_0。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        val draftName = s.draftPath.takeIf { it.isNotBlank() }
+            ?.let { runCatching { java.io.File(it).name }.getOrNull() } ?: "未选择"
+        Text("当前草稿：$draftName", style = MaterialTheme.typography.bodySmall)
+        if (s.draftPath.isNotBlank()) {
+            OutlinedButton(onClick = { vm.setDraftModel(null) }) { Text("关闭加速") }
+        }
+        Text("γ（每轮猜几个，改完自动重挂）：${s.draftMax}", style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(4, 6, 8).forEach { g ->
+                if (s.draftMax == g) {
+                    Button(onClick = {}) { Text("$g") }
+                } else {
+                    OutlinedButton(onClick = {
+                        vm.updateSettings(s.copy(draftMax = g))
+                        if (s.draftPath.isNotBlank()) {
+                            vm.setDraftModel(runCatching { java.io.File(s.draftPath) }.getOrNull())
+                        }
+                    }) { Text("$g") }
+                }
+            }
+        }
+        Text("从已导入模型里选草稿：", style = MaterialTheme.typography.bodySmall)
+        val draftCandidates = vm.modelFiles.filter {
+            it.name.endsWith(".gguf", true) && it.absolutePath != vm.modelPath.value
+        }
+        if (draftCandidates.isEmpty()) {
+            Text("（没有其它 gguf —— 先导入一个 Qwen3-0.6B）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        draftCandidates.forEach { f ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(f.name, style = MaterialTheme.typography.bodySmall)
+                    Text(ModelLoader.sizeText(f.length()),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                TextButton(onClick = { vm.setDraftModel(f) }) { Text("设为草稿") }
+            }
+        }
+
         // 长按可复制：诊断日志太长，复制粘贴比截图清楚得多
         SelectionContainer {
             Text(

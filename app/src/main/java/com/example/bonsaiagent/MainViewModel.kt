@@ -1074,14 +1074,76 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // 动态后端需要知道 .so 目录（ggml 会在这里找 libggml-cpu-android_armvX_*.so）
             val nativeDir = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
             val ok = Llama.load(path, cores, settings.value.contextSize, nativeDir)
+
+            // v10.72：主模型就绪后挂草稿模型（投机解码）。
+            // 挂不上不影响主模型 —— 只是这一路加速没开成，退回单 token 生成。
+            var draftInfo = ""
+            if (ok) {
+                val s0 = settings.value
+                val dp = s0.draftPath
+                val usable = s0.useDraft && dp.isNotBlank() &&
+                        dp != path && java.io.File(dp).exists()
+                if (usable) {
+                    val dth = (s0.threads / 2).coerceIn(1, 4)
+                    val dok = Llama.loadDraft(dp, dth, s0.draftMax)
+                    draftInfo = if (dok) {
+                        "\n🚀 投机加速已开（草稿 ${java.io.File(dp).name}，γ=${s0.draftMax}）"
+                    } else {
+                        "\n⚠️ 投机没挂上：${Llama.getLastError()}（已退回单 token 生成）"
+                    }
+                } else if (s0.useDraft) {
+                    draftInfo = "\n（还没选草稿模型 → 纯单 token 生成，约 11 tok/s）"
+                }
+            }
             withContext(Dispatchers.Main) {
                 modelLoaded.value = ok
                 genStatus.value = GenStatus(phase = "就绪")
                 status.value = if (ok) {
-                    if (fixed != null) "模型就绪 ✅（$fixed）" else "模型就绪 ✅"
+                    (if (fixed != null) "模型就绪 ✅（$fixed）" else "模型就绪 ✅") + draftInfo
                 } else {
                     val err = Llama.getLastError()
                     "模型加载失败" + if (err.isNotBlank()) "：\n${err.trim()}" else "，请确认是 prism 分支支持的格式"
+                }
+            }
+        }
+    }
+
+    /**
+     * v10.72：指定 / 取消草稿模型（投机解码用）。
+     *
+     * 挑草稿模型的三条硬规矩（否则速度不升反降）：
+     *   ① 必须和主模型同一个家族、同一套词表 —— Qwen3-4B 配 Qwen3-0.6B；
+     *   ② 体积要比主模型小 5 倍以上，否则草稿自己就成了瓶颈；
+     *   ③ 精度别太抠，Q8_0 比 Q4 猜得准，接受率高得多。
+     */
+    fun setDraftModel(f: java.io.File?) {
+        if (genStatus.value.phase == "生成中") {
+            status.value = "正在生成，等这句说完再切换草稿模型"
+            return
+        }
+        val p = f?.absolutePath ?: ""
+        updateSettings(settings.value.copy(draftPath = p, useDraft = f != null))
+        if (!Llama.isLoaded()) {
+            status.value = if (f == null) "已清除草稿模型" else "已选草稿：${f.name}（加载主模型时自动挂上）"
+            return
+        }
+        val s0 = settings.value
+        if (p.isEmpty()) {
+            // 空路径 = 关闭投机，主模型照常可用
+            Llama.loadDraft(null, 1, s0.draftMax)
+            status.value = "已关闭投机加速（回到单 token 生成）"
+            return
+        }
+        status.value = "正在挂草稿模型 ${f.name}…"
+        viewModelScope.launch(Dispatchers.IO) {
+            val dth = (s0.threads / 2).coerceIn(1, 4)
+            val dok = Llama.loadDraft(p, dth, s0.draftMax)
+            withContext(Dispatchers.Main) {
+                status.value = if (dok) {
+                    "🚀 投机加速已开启：草稿 ${f.name}，γ=${s0.draftMax}\n" +
+                        "生成速度看日志里的「投机统计」接受率，低于 35% 就换个草稿模型"
+                } else {
+                    "挂草稿失败：${Llama.getLastError()}\n（主模型不受影响，仍在单 token 生成）"
                 }
             }
         }
