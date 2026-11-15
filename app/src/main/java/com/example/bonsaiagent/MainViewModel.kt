@@ -71,7 +71,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     val settings = mutableStateOf(store.load())
-    val modelPath = mutableStateOf(ModelLoader.currentModelPath(app))
+    // v10.76：排除草稿模型 —— 否则导入 0.6B 草稿后，它成了「最新导入」，
+    // 每次打开 App 默认加载的就是 0.6B 而不是真正的主模型。
+    val modelPath = mutableStateOf(ModelLoader.currentModelPath(app, store.load().draftPath))
     val modelLoaded = mutableStateOf(Llama.isLoaded())
     val status = mutableStateOf("欢迎使用 BonsaiAgent")
     // v6.0：界面状态条用的实时状态（替代原来刷屏的实时日志）
@@ -93,6 +95,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * （v10.23 就这么崩过一次：App 一打开就闪退）
      */
     val modelFiles = mutableStateListOf<java.io.File>()
+
+    /**
+     * v10.76：拆成两个列表。
+     *
+     * 起因：投机解码要导入一个 0.6B 草稿模型，它和主模型存在同一个目录里，
+     * 设置页把两者混在一个「已导入模型」列表里 —— 点「加载」很容易加载到 0.6B，
+     * 而且 currentModelPath 取「最新导入」，让 App 每次启动都默认选中草稿模型。
+     *
+     * 现在：mainModelFiles 给主模型用，draftModelFiles 单独成组显示。
+     */
+    val mainModelFiles = mutableStateListOf<java.io.File>()
+    val draftModelFiles = mutableStateListOf<java.io.File>()
 
     init {
         // v10.0：后台扫一遍手机里装了哪些应用，给「打开微信」这类指令用。
@@ -446,6 +460,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshModels() {
         modelFiles.clear()
         modelFiles.addAll(ModelLoader.listModels(getApplication()))
+
+        val draftPath = settings.value.draftPath
+        mainModelFiles.clear()
+        mainModelFiles.addAll(modelFiles.filter { it.absolutePath != draftPath })
+        draftModelFiles.clear()
+        draftModelFiles.addAll(modelFiles.filter { it.absolutePath == draftPath })
+
+        // 默认指针如果指向了草稿模型，纠正成体积最大的主模型
+        val cur = modelPath.value
+        if (cur != null && cur == draftPath) {
+            modelPath.value = ModelLoader.currentModelPath(getApplication(), draftPath)
+        }
     }
 
     /**
@@ -983,6 +1009,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadModelFile(f: java.io.File) {
         if (!f.exists()) { status.value = "文件不见了：${f.name}"; refreshModels(); return }
+        // v10.76：草稿模型不允许当主模型加载 —— 0.6B 单独跑出来的回答没有意义
+        if (f.absolutePath == settings.value.draftPath) {
+            status.value = "「${f.name}」是投机解码的草稿模型，不能作为主模型加载。\n" +
+                    "先在下方「草稿模型」分组里取消它，或改选一个体积大的主模型。"
+            return
+        }
         modelPath.value = f.absolutePath
         status.value = "正在加载 ${f.name}…"
         loadModel()
@@ -992,7 +1024,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val wasCurrent = modelPath.value == f.absolutePath
         val ok = ModelLoader.deleteModel(f)
         if (ok && wasCurrent) {
-            modelPath.value = ModelLoader.currentModelPath(getApplication())
+            modelPath.value = ModelLoader.currentModelPath(getApplication(), settings.value.draftPath)
             try { Llama.unload() } catch (_: Throwable) {}
             try { LiteRtEngine.unload() } catch (_: Throwable) {}
             modelLoaded.value = false
@@ -1007,9 +1039,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 refreshModels()
                 if (p != null) {
-                    modelPath.value = p
-                    status.value = "模型已导入，正在加载…"
-                    loadModel()
+                    // v10.76：导入的如果明显比当前主模型小（多半是 0.6B 草稿），
+                    // 不要自动当主模型加载，提示用户去「草稿模型」分组里确认
+                    val nf = java.io.File(p)
+                    val cur = modelPath.value?.let { java.io.File(it) }
+                    val looksLikeDraft = cur != null && cur.exists() && cur.length() > 0 &&
+                            nf.length() * 100 / cur.length() < 60
+                    if (looksLikeDraft) {
+                        status.value = "已导入「${nf.name}」（${ModelLoader.sizeText(nf.length())}）。\n" +
+                                "它比当前主模型小很多，看起来是草稿模型 —— " +
+                                "请在下方「投机解码」里点「设为草稿」，不要直接当主模型用。"
+                    } else {
+                        modelPath.value = p
+                        status.value = "模型已导入，正在加载…"
+                        loadModel()
+                    }
                 } else {
                     // v10.22：把真实原因说出来 —— 之前只说"导入失败"，
                     // 复制中断（2.33GB 只进去 0.15GB）也吃得下这个提示，白折腾一轮
@@ -1121,9 +1165,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             status.value = "正在生成，等这句说完再切换草稿模型"
             return
         }
+        // v10.76：主模型不能同时当草稿，否则两个列表都会空掉一个
+        if (f != null && f.absolutePath == modelPath.value) {
+            status.value = "「${f.name}」正在作为主模型使用，不能再当草稿。\n" +
+                    "投机解码要用更小的同家族模型（如 Qwen3-0.6B）"
+            return
+        }
         val p = f?.absolutePath ?: ""
         val fname = f?.name ?: "（无）"
         updateSettings(settings.value.copy(draftPath = p, useDraft = f != null))
+        // 草稿选择变了，主模型/草稿两个列表要重新分组
+        refreshModels()
         if (!Llama.isLoaded()) {
             status.value = if (f == null) "已清除草稿模型" else "已选草稿：$fname（加载主模型时自动挂上）"
             return
