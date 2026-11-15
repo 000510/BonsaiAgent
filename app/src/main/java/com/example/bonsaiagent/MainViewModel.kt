@@ -68,6 +68,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = SettingsStore(app)
 
+    /** 直接持有构造参数，避免 init 早期 getApplication() 返回 null 导致 NPE 闪退 */
+    private val appRef: android.app.Application = app
+
     /**
      * v10.76：日志、崩溃记录、临时库统一收进 files/logs/。
      * 之前 run_log.txt / last_crash.txt / native_stderr.txt / npu_bridge.log 全堆在
@@ -82,7 +85,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** v10.76：把旧版本散在 files 根目录的日志搬进 logs/ */
     private fun migrateLegacyLogs() {
         runCatching {
-            val root = getApplication<android.app.Application>().filesDir
+            val root = appRef.filesDir
             listOf(
                 "run_log.txt", "last_crash.txt", "native_stderr.txt",
                 "logcat_dump.txt", "npu_bridge.log"
@@ -343,7 +346,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun buildDiagnostics(): String {
         val sb = StringBuilder()
-        val app = getApplication<android.app.Application>()
+        val app = appRef
         sb.appendLine("=== Bonsai Lite 诊断 ===")
         val dfNow = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.CHINA)
         sb.appendLine("时间: " + dfNow.format(java.util.Date()))
@@ -547,7 +550,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             // ⓪ v10.28：先确认 Google 官方 NPU 运行时有没有打进 APK
             sb.appendLine("--- App 自带库（nativeLibraryDir）---")
-            val libDir = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
+            val libDir = appRef.applicationInfo.nativeLibraryDir
             val appLibs = try { java.io.File(libDir).listFiles() } catch (_: Throwable) { null } ?: emptyArray()
             sb.appendLine("$libDir 共 ${appLibs.size} 个")
             val npuOwn = appLibs.filter {
@@ -693,7 +696,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             // 摘要放最后 —— 诊断报告只抓 run_log 末尾，这样才不会被截掉
             sb.appendLine("--- 探针摘要 ---")
-            val libDir2 = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
+            val libDir2 = appRef.applicationInfo.nativeLibraryDir
             val disp = try {
                 java.io.File(libDir2).listFiles()?.firstOrNull { it.name.contains("Dispatch") }
             } catch (_: Throwable) { null }
@@ -738,7 +741,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun probeNpuRun() {
         viewModelScope.launch(Dispatchers.IO) {
-            val app = getApplication<android.app.Application>()
+            val app = appRef
             val lf = logFile("run_log.txt")
             val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
 
@@ -873,7 +876,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         benchRunning = true
         viewModelScope.launch(Dispatchers.IO) {
-            val app = getApplication<android.app.Application>()
+            val app = appRef
             val lf = logFile("run_log.txt")
             val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
             fun step(msg: String) {
@@ -1095,7 +1098,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (path.endsWith(".litertlm", ignoreCase = true)) {
             genStatus.value = GenStatus(phase = "加载中")
             viewModelScope.launch(Dispatchers.IO) {
-                val app = getApplication<android.app.Application>()
+                val app = appRef
                 val be = settings.value.litertBackend
                 withContext(Dispatchers.Main) { status.value = "正在加载 LiteRT 模型（后端 $be）…" }
                 conversationReady = false
@@ -1139,7 +1142,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // 用户测 1/4/8 完全一样，日志永远 6，全是因为这一行。
             val cores = settings.value.threads.coerceIn(1, 16)
             // 动态后端需要知道 .so 目录（ggml 会在这里找 libggml-cpu-android_armvX_*.so）
-            val nativeDir = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
+            val nativeDir = appRef.applicationInfo.nativeLibraryDir
             val ok = Llama.load(path, cores, settings.value.contextSize, nativeDir)
 
             // v10.72：主模型就绪后挂草稿模型（投机解码）。
@@ -1525,7 +1528,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     mainHandler.post { ai.content.value += cloud }
                 }
                 is RouteResult.Action -> {
-                    val app = getApplication<android.app.Application>()
+                    val app = appRef
                     val todo = if (allActions.isNotEmpty()) allActions else listOf(route)
                     val sb = StringBuilder()
                     for (act in todo) {
@@ -1552,7 +1555,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 else -> {
                     // 直接回答：这时候才把模型写的东西一次显示出来
-                    val app = getApplication<android.app.Application>()
+                    val app = appRef
                     val trimmed = finalText.trim()
                     // v10.6：模型有时只回一个应用名（实测问"能刷短视频的是哪个"→ 回「抖音」），
                     // 没带 [ACTION:openapp] 格式。长度很短且能在应用表里认出来，就当打开处理。
