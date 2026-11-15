@@ -155,7 +155,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         // 原生层崩过 / 上次运行到哪一步，这里能直接看到
         val crashFile = logFile("last_crash.txt")
-        val logFile = logFile("run_log.txt")
+        val runLogFile = logFile("run_log.txt")
         val errFile = logFile("native_stderr.txt")
         // v6.3：崩溃记录读完不再删除，留一份给"分享诊断"，否则点按钮时已经没了
         val crash = if (crashFile.exists()) {
@@ -164,8 +164,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         lastCrash.value = crash
         // v6.3：界面上只留摘要。完整内容点"分享诊断"一键带走，
         // 不用再在手机上长按拖选几百行日志。
-        val log = if (logFile.exists()) {
-            try { logFile.readLines().filter { it.isNotBlank() }.takeLast(6).joinToString("\n") } catch (e: Throwable) { "" }
+        val log = if (runLogFile.exists()) {
+            try { runLogFile.readLines().filter { it.isNotBlank() }.takeLast(6).joinToString("\n") } catch (e: Throwable) { "" }
         } else ""
         val tail = buildString {
             if (log.isNotEmpty()) append("\n\n最近日志：\n").append(log)
