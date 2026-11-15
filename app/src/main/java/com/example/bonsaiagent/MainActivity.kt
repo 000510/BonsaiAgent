@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.material.icons.outlined.AddComment
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
@@ -89,6 +90,17 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                             fontSize = 11.sp,
                             color = if (loaded) cs.primary else cs.onSurfaceVariant
                         )
+                    }
+                },
+                actions = {
+                    // 新会话：只清对话列表，不用退出 App（设置页不显示）
+                    if (tab != 2) {
+                        IconButton(onClick = { vm.newSession() }) {
+                            Icon(
+                                imageVector = Icons.Outlined.AddComment,
+                                contentDescription = "新会话"
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
