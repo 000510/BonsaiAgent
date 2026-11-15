@@ -20,6 +20,49 @@ import java.io.StringWriter
 object CrashCatcher {
 
     const val FILE_NAME = "bonsai_crash.txt"
+    const val BOOT_NAME = "bonsai_boot.txt"
+
+    /**
+     * 启动流水埋点：每一步都写一行。
+     *
+     * 黑屏时最需要知道的是「卡在哪一步」，而不是「崩在哪一行」——
+     * 卡住不会产生异常，也就没有堆栈。于是把关键节点全记下来：
+     * 用户把 Download/bonsai_boot.txt 发来，就能看到最后一条停在哪。
+     */
+    fun mark(ctx: Context, msg: String) {
+        runCatching {
+            val line = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
+                .format(java.util.Date()) + "  " + msg + "\n"
+            val dir = File(ctx.filesDir, "logs").apply { mkdirs() }
+            File(dir, "boot_trace.txt").appendText(line)
+            writeDownloads(ctx, BOOT_NAME, File(dir, "boot_trace.txt").readText(), append = true, newLine = line)
+        }
+    }
+
+    /** 写系统 Download 目录（Android 10+ 走 MediaStore，免权限） */
+    private fun writeDownloads(ctx: Context, name: String, text: String, append: Boolean = false, newLine: String? = null) {
+        runCatching {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+            }
+            // 每次都重建，避免重复追加
+            ctx.contentResolver.delete(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                "${MediaStore.MediaColumns.DISPLAY_NAME}=?",
+                arrayOf(name)
+            )
+            val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            uri?.let {
+                ctx.contentResolver.openOutputStream(it)?.use { os ->
+                    os.write(text.toByteArray())
+                }
+            }
+        }
+    }
 
     fun install(ctx: Context) {
         val prev = Thread.getDefaultUncaughtExceptionHandler()
@@ -42,28 +85,7 @@ object CrashCatcher {
                 }
 
                 // ② 系统下载目录（Android 10+ 走 MediaStore，不需要存储权限）
-                runCatching {
-                    val values = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, FILE_NAME)
-                        put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                        }
-                    }
-                    ctx.contentResolver.delete(
-                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                        "${MediaStore.MediaColumns.DISPLAY_NAME}=?",
-                        arrayOf(FILE_NAME)
-                    )
-                    val uri = ctx.contentResolver.insert(
-                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-                    )
-                    uri?.let {
-                        ctx.contentResolver.openOutputStream(it)?.use { os ->
-                            os.write(text.toByteArray())
-                        }
-                    }
-                }
+                writeDownloads(ctx, FILE_NAME, text)
             }
             prev?.uncaughtException(t, e)
         }
