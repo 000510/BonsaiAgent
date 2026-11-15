@@ -29,6 +29,7 @@
 #include <pthread.h>
 #include <dlfcn.h>
 #include <sched.h>
+#include <sched.h>
 #include <cstdlib>
 #include <dirent.h>
 #include <android/log.h>
@@ -84,6 +85,86 @@ static long mem_available_mb() {
     }
     fclose(f);
     return kb < 0 ? -1 : kb / 1024;
+}
+
+// ---------------------------------------------------------------------------
+// v10.71：CPU 绑核
+//
+// 天玑 9300+ 是非对称大核布局（全大核，但仍有快慢两簇）：
+//   cpu0-3 = Cortex-A720 @ 2.0GHz
+//   cpu4-7 = Cortex-X4   @ 2.85 / 3.4GHz
+//
+// 4 线程是这台机器上的最优值（1/6/8 都更慢，已实测），但 Android 的 EAS
+// 调度器不保证把这 4 个线程放在 X4 上 —— 它优先省电，负载不满时常把人往
+// A720 上塞。跑在 2.0GHz 的核心上单核差 40% 以上，decode 直接掉一截。
+//
+// 这里读 cpufreq_max 自己判断哪几个核最快，把当前线程的 affinity 钉过去；
+// llama.cpp 的 worker 是这条线程 fork 的，会继承 affinity mask。
+//
+// 注意：Android 的 cgroup/cpuset 可能覆盖 affinity（后台会被限核），
+// 所以只报结果，不当成必然成功。
+// ---------------------------------------------------------------------------
+static void pin_to_fastest_cpus(int n) {
+    if (n <= 0) return;
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    if (ncpu <= 0 || ncpu > 64) {
+        log_line("[绑核] 核数异常 %ld，跳过", ncpu);
+        return;
+    }
+
+    struct Core { long khz; int id; };
+    std::vector<Core> cores;
+    for (int i = 0; i < (int) ncpu; ++i) {
+        char path[160];
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
+        FILE* f = fopen(path, "r");
+        if (!f) continue;
+        long khz = 0;
+        if (fscanf(f, "%ld", &khz) != 1) khz = 0;
+        fclose(f);
+        cores.push_back({khz, i});
+    }
+    if (cores.empty()) {
+        log_line("[绑核] 读不到 cpufreq 表（无权限或无此节点），跳过");
+        return;
+    }
+
+    std::sort(cores.begin(), cores.end(), [](const Core& a, const Core& b) {
+        if (a.khz != b.khz) return a.khz > b.khz;
+        return a.id < b.id;
+    });
+
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    std::string picked;
+    for (int i = 0; i < (int) cores.size() && i < n; ++i) {
+        CPU_SET(cores[i].id, &set);
+        char buf[48];
+        snprintf(buf, sizeof(buf), "%s%d@%.2fG", picked.empty() ? "" : ",",
+                 cores[i].id, (double) cores[i].khz / 1000000.0);
+        picked += buf;
+    }
+
+    if (sched_setaffinity(0, sizeof(set), &set) != 0) {
+        log_line("[绑核] 失败 errno=%d（可能被 cgroup 限核），退回系统调度", errno);
+        return;
+    }
+
+    cpu_set_t got;
+    CPU_ZERO(&got);
+    if (sched_getaffinity(0, sizeof(got), &got) == 0) {
+        std::string actual;
+        for (int i = 0; i < (int) ncpu; ++i) {
+            if (CPU_ISSET(i, &got)) {
+                if (!actual.empty()) actual += ",";
+                actual += std::to_string(i);
+            }
+        }
+        log_line("[绑核] 成功 目标=%s 生效=%s", picked.c_str(), actual.c_str());
+    } else {
+        log_line("[绑核] 成功 目标=%s", picked.c_str());
+    }
 }
 
 static void set_stage(const char* s) {
@@ -532,6 +613,11 @@ Java_com_example_bonsaiagent_llm_Llama_init(
     }
 
     ensure_backend();   // 此时日志文件已就绪，后端加载情况能落盘
+
+    // v10.71：绑到最快的那几个核。
+    // 必须在 llama model / context 创建之前调用 —— worker 线程是之后才 fork 的，
+    // 只有先设好 affinity，它们才会继承这个 mask。
+    pin_to_fastest_cpus(n_threads > 0 ? n_threads : 4);
     // v5.3：把 CPU 指令集能力打出来。
     // 这是能不能启用 dotprod / i8mm 加速的唯一依据（编译期决定指令集，
     // 编错了会 SIGILL）。用户把日志发来就能对症选 arch。
