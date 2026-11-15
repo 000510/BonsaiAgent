@@ -732,9 +732,12 @@ Java_com_example_bonsaiagent_llm_Llama_init(
 
     std::string dir;
     if (files_dir_from_model(spath, dir)) {
-        std::string lf = dir + "/run_log.txt";
-        std::string cf = dir + "/last_crash.txt";
-        std::string ef = dir + "/native_stderr.txt";
+        // v10.76：日志统一放 files/logs/，别再散在 files 根目录跟模型目录打架
+        std::string logDir = dir + "/logs";
+        ::mkdir(logDir.c_str(), 0700);
+        std::string lf = logDir + "/run_log.txt";
+        std::string cf = logDir + "/last_crash.txt";
+        std::string ef = logDir + "/native_stderr.txt";
         if (lf.size() < sizeof(g_logFile))   snprintf(g_logFile,   sizeof(g_logFile),   "%s", lf.c_str());
         if (cf.size() < sizeof(g_crashFile)) snprintf(g_crashFile, sizeof(g_crashFile), "%s", cf.c_str());
         // 每次加载开一份新日志
