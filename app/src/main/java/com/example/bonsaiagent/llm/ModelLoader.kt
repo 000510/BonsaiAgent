@@ -73,15 +73,29 @@ object ModelLoader {
         }?.sortedByDescending { it.lastModified() } ?: emptyList()
     }
 
+    /** 私有目录里的主模型（排除草稿模型，避免 0.6B 混进主模型列表里被误加载） */
+    fun listMainModels(context: Context, excludePath: String? = null): List<File> =
+        listModels(context).filter { it.absolutePath != excludePath }
+
+    /** 私有目录里、被指定为草稿的那一个（用于设置页单独成组显示） */
+    fun findDraftModel(context: Context, draftPath: String?): File? =
+        if (draftPath.isNullOrBlank()) null
+        else listModels(context).firstOrNull { it.absolutePath == draftPath }
+
     fun deleteModel(file: File): Boolean = try {
         file.delete()
     } catch (_: Throwable) {
         false
     }
 
-    /** 已导入模型的本地路径（取最新的） */
-    fun currentModelPath(context: Context): String? =
-        listModels(context).firstOrNull()?.absolutePath
+    /**
+     * 默认加载哪个模型。
+     *
+     * 原来是「取最新导入的」，于是导入 0.6B 草稿模型后，每次打开 App 默认加载的都成了 0.6B。
+     * 现改为：排除草稿模型，取**体积最大**的那个 —— 主模型永远比草稿大。
+     */
+    fun currentModelPath(context: Context, excludePath: String? = null): String? =
+        listMainModels(context, excludePath).maxByOrNull { it.length() }?.absolutePath
 
     fun sizeText(bytes: Long): String = fmt(bytes)
 
