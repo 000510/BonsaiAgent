@@ -23,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -111,6 +112,12 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
     val cs = MaterialTheme.colorScheme
     val loaded = vm.modelLoaded.value
+    val ctx = LocalContext.current
+    val ver = remember {
+        runCatching {
+            ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+        }.getOrNull() ?: "?"
+    }
 
     val tabs = listOf(
         TabItem("对话", Icons.Filled.ChatBubble, Icons.Outlined.ChatBubbleOutline),
@@ -130,7 +137,7 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                             fontSize = 17.sp
                         )
                         Text(
-                            if (loaded) "本地模型已就绪" else "未加载模型",
+                            "v$ver · " + (if (loaded) "模型已就绪" else "未加载模型"),
                             fontSize = 11.sp,
                             color = if (loaded) cs.primary else cs.onSurfaceVariant
                         )
