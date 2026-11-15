@@ -67,6 +67,19 @@ set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 # 现在按实测能力放开。注意：这是编译期决定，换到不支持这些指令的手机会 SIGILL。
 set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+i8mm" CACHE STRING "" FORCE)
 
+# v10.71：开 KleidiAI —— ARM 官方的量化矩阵乘微内核库。
+#
+# 为什么值得开：Q4_K_M 的 decode 阶段 90% 时间花在 mat_vec（矩阵×向量）上，
+# ggml 自带的 repack kernel 已经用了 i8mm，但它是通用实现；KleidiAI 是 ARM
+# 针对自家核心手写调优的版本（q4_0/q4_K_M/q8_0 都有专门 kernel），
+# ARM 官方给的量级是 20%~40%。而且它只对 int4/int8 权重生效 —— 我们正好用 Q4_K_M。
+#
+# 依赖：CMake FetchContent 会自己下 ARM-software/kleidiai v1.32.0（带 MD5 校验），
+# 不需要 submodule，也不需要预先装什么。交叉编译到 Android arm64 是官方支持的目标。
+#
+# 如果编译失败或速度反而变慢，把这一行删掉即可，其它都不用动。
+set(GGML_CPU_KLEIDIAI ON CACHE BOOL "" FORCE)
+
 # ---------------------------------------------------------------------------
 # v9.0 实验：开启 Vulkan 后端（GPU 加速）
 #
