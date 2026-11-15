@@ -124,8 +124,14 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
             OutlinedButton(onClick = { vm.setDraftModel(null) }) { Text("关闭加速") }
         }
         Text("γ（每轮猜几个，改完自动重挂）：${s.draftMax}", style = MaterialTheme.typography.bodySmall)
+        Text(
+            "手机上 2~3 最划算。每多猜一个，主模型就要多算一次 15 万词表的输出层 —— " +
+                "实测 γ=8 时这一项就吃掉 35% 的时间。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(4, 6, 8).forEach { g ->
+            listOf(2, 3, 4, 6).forEach { g ->
                 if (s.draftMax == g) {
                     Button(onClick = {}) { Text("$g") }
                 } else {

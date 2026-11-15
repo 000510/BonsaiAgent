@@ -1084,7 +1084,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val usable = s0.useDraft && dp.isNotBlank() &&
                         dp != path && java.io.File(dp).exists()
                 if (usable) {
-                    val dth = (s0.threads / 2).coerceIn(1, 4)
+                    val dth = s0.threads.coerceIn(2, 4)   // v10.74：草稿串行跑，给足 4 线程
                     val dok = Llama.loadDraft(dp, dth, s0.draftMax)
                     draftInfo = if (dok) {
                         "\n🚀 投机加速已开（草稿 ${java.io.File(dp).name}，γ=${s0.draftMax}）"
@@ -1137,7 +1137,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         status.value = "正在挂草稿模型 $fname…"
         viewModelScope.launch(Dispatchers.IO) {
-            val dth = (s0.threads / 2).coerceIn(1, 4)
+            val dth = s0.threads.coerceIn(2, 4)   // v10.74：草稿串行跑，给足 4 线程
             val dok = Llama.loadDraft(p, dth, s0.draftMax)
             withContext(Dispatchers.Main) {
                 status.value = if (dok) {

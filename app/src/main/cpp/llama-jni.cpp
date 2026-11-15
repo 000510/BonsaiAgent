@@ -1296,6 +1296,12 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     std::vector<llama_token> cand;          // 本块草稿候选
     std::vector<llama_token> dtarget;       // 草稿侧对齐目标（复用容器，少分配）
 
+    // v10.74 自适应 γ：
+    // 手机上每验证一个位置，主模型就要多算一次 15 万词表的输出层（约 20ms），
+    // γ=8 时这一项能吃掉 35% 的时间。所以 γ 不是越大越好 —— 要让它在
+    // 「猜得中」和「别白算」之间自己找平衡，而不是固定值。
+    int gammaNow = useDraft ? draft->max_draft : 0;
+
     while (n_gen < budget) {
         // v6.6：把当前 token 序号写进 stage，崩溃时能精确定位
         {
@@ -1352,7 +1358,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             } else {
                 // 上下文余量也要算进去：t0 占一个位置，候选不能把 n_ctx 撑爆
                 const int space = n_ctx - 1 - (n_past + 1);
-                const int want = std::min(std::min(room, draft->max_draft), std::max(0, space));
+                const int want = std::min(std::min(room, gammaNow), std::max(0, space));
                 for (int g = 0; g < want; g++) {
                     llama_token c = draft_step(draft, n_past + 1 + g);
                     if (c < 0 || llama_vocab_is_eog(vocab, c)) break;
@@ -1420,6 +1426,15 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         if (useDraft && !cand.empty()) {
             draft->n_prop += (long) cand.size();
             draft->n_acc  += (long) accepted;
+            // 自适应：一半都没猜中就缩，全中才敢放长。
+            // 下界 2 —— 只剩 1 个候选时投机毫无意义，开销照付。
+            if ((int) cand.size() >= 2) {
+                if (accepted * 2 < (int) cand.size()) {
+                    if (gammaNow > 2) gammaNow--;
+                } else if (accepted == (int) cand.size()) {
+                    if (gammaNow < draft->max_draft) gammaNow++;
+                }
+            }
         }
         if (stop) break;
 
@@ -1440,10 +1455,10 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         // v10.72：投机是否真的在干活，只看这一个数 —— 接受率低于 35% 就说明
         // 草稿模型跟主模型脾气差太多，提速会被自己的开销吃掉。
         if (draft && draft->n_prop > 0) {
-            log_line("投机统计：候选 %ld 个，采纳 %ld 个（接受率 %.0f%%），γ=%d",
+            log_line("投机统计：候选 %ld 个，采纳 %ld 个（接受率 %.0f%%），γ 上限 %d → 收敛到 %d",
                      draft->n_prop, draft->n_acc,
                      100.0 * (double) draft->n_acc / (double) draft->n_prop,
-                     draft->max_draft);
+                     draft->max_draft, gammaNow);
         }
     }
 

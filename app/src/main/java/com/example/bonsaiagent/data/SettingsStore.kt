@@ -32,7 +32,7 @@ data class AgentSettings(
     // 主模型一次前向验证 γ 个候选，把「读权重的带宽」摊薄，实测能提速 1.4~1.8 倍。
     val useDraft: Boolean = true,
     val draftPath: String = "",
-    val draftMax: Int = 6
+    val draftMax: Int = 3
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述。
@@ -82,6 +82,13 @@ class SettingsStore(context: Context) {
             if (isOld) sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
             sp.edit().putInt("prefsVersion", 12).apply()
         }
+        // v10.74：γ 默认从 6 降到 3。
+        // 实测日志 058：γ=8、接受率 24% 时只有 1.71 tok/s，比不开还慢 6 倍。
+        // 原因是手机算 Output 层（15 万词表）代价极高，每多验证一个位置就多一次
+        // 完整的前向输出层。手机上 γ=2~3 才是甜点。
+        if (sp.getInt("prefsVersion", 1) < 13) {
+            sp.edit().putInt("draftMax", 3).putInt("prefsVersion", 13).apply()
+        }
         return loadInner()
     }
 
@@ -98,7 +105,7 @@ class SettingsStore(context: Context) {
         litertBackend = sp.getString("litertBackend", "NPU") ?: "NPU",
         useDraft = sp.getBoolean("useDraft", true),
         draftPath = sp.getString("draftPath", "") ?: "",
-        draftMax = sp.getInt("draftMax", 6),
+        draftMax = sp.getInt("draftMax", 3),
         apiEnabled = sp.getBoolean("apiEnabled", false),
         deepseekKey = sp.getString("deepseekKey", "") ?: "",
         apiBase = sp.getString("apiBase", "https://api.deepseek.com") ?: "https://api.deepseek.com",
