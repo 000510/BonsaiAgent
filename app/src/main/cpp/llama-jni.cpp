@@ -1301,6 +1301,11 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     // γ=8 时这一项能吃掉 35% 的时间。所以 γ 不是越大越好 —— 要让它在
     // 「猜得中」和「别白算」之间自己找平衡，而不是固定值。
     int gammaNow = useDraft ? draft->max_draft : 0;
+    // v10.75：连续几轮一个都没猜中。γ 缩到 2 以后如果还是零采纳，
+    // 说明这段内容草稿模型完全摸不着头脑 —— 继续投机只会拖慢主模型，
+    // 直接关掉本轮的投机，回到 100ms/token 的老路径。
+    // 下一次生成会重新开（useDraft 是局部变量）。
+    int zeroStreak = 0;
 
     while (n_gen < budget) {
         // v6.6：把当前 token 序号写进 stage，崩溃时能精确定位
@@ -1318,6 +1323,19 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         // 但为了排除「是不是我改写循环导致变慢」这个变量，这里原样还原：
         // 单次采样 → llama_batch_get_one → decode，一步不多。
         if (!useDraft) {
+            // v10.75：从投机中途切回老路径时，可能还攥着一个「已采样、没解码」的
+            // token（pending），必须先把它落地，否则 logits 和 KV 会错位一位。
+            if (pending >= 0) {
+                if (emit(pending, n_gen) != 0) break;
+                n_gen++;
+                if (!decode_one(st->ctx, pending, n_past)) {
+                    g_lastError = "decode 失败";
+                    break;
+                }
+                n_past++;
+                pending = -1;
+                if (n_gen >= budget || n_past >= n_ctx - 1) break;
+            }
             llama_token next = llama_sampler_sample(smpl, st->ctx, -1);
             if (next < 0) { log_line("!! 采样返回负数 id=%d，中止", next); break; }
             if (emit(next, n_gen) != 0) break;
@@ -1435,6 +1453,19 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
                     if (gammaNow < draft->max_draft) gammaNow++;
                 }
             }
+            // 硬止损：连续 2 块零采纳，且 γ 已经缩到底 → 本轮不再投机。
+            // 实测（2026-11-15）：自由生成时接受率会掉到 0，γ=2 全错也有
+            // 220ms/token（4.5 tok/s），比不开投机的 10 tok/s 还慢一倍。
+            if (accepted == 0) {
+                zeroStreak++;
+            } else {
+                zeroStreak = 0;
+            }
+            if (zeroStreak >= 2 && gammaNow <= 2) {
+                useDraft = false;
+                log_line("连续 %d 轮零采纳（接受率太低）→ 本次生成关闭投机，回到单 token 路径",
+                         zeroStreak);
+            }
         }
         if (stop) break;
 
@@ -1459,6 +1490,9 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
                      draft->n_prop, draft->n_acc,
                      100.0 * (double) draft->n_acc / (double) draft->n_prop,
                      draft->max_draft, gammaNow);
+            if (!useDraft) {
+                log_line("   → 本轮中途已关闭投机（连续零采纳，止损）");
+            }
         }
     }
 
