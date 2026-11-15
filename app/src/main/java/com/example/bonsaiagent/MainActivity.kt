@@ -39,15 +39,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashCatcher.mark(applicationContext, "1 onCreate 开始")
         CrashCatcher.install(applicationContext)
+        CrashCatcher.mark(applicationContext, "2 崩溃捕获已安装")
 
         // 主动触发 ViewModel 创建，失败就把堆栈显示出来（而不是黑屏后直接退出）
         val bootError: String? = try {
+            CrashCatcher.mark(applicationContext, "3 开始创建 ViewModel")
             vm
+            CrashCatcher.mark(applicationContext, "4 ViewModel 创建成功")
             null
         } catch (t: Throwable) {
             val sw = StringWriter()
             t.printStackTrace(PrintWriter(sw))
+            CrashCatcher.mark(applicationContext, "4X ViewModel 创建失败: ${t.javaClass.simpleName}: ${t.message}")
             sw.toString()
         }
 
@@ -78,6 +83,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        CrashCatcher.mark(applicationContext, "5 setContent 已调用")
     }
 }
 
@@ -92,6 +98,7 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
             ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
         }.getOrNull() ?: ""
     }
+    LaunchedEffect(Unit) { CrashCatcher.mark(ctx, "6 首帧已渲染") }
 
     Scaffold(
         topBar = {
