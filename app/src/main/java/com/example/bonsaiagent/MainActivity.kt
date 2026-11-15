@@ -23,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,6 +31,8 @@ import com.example.bonsaiagent.ui.BonsaiTheme
 import com.example.bonsaiagent.ui.ChatScreen
 import com.example.bonsaiagent.ui.RouterScreen
 import com.example.bonsaiagent.ui.SettingsScreen
+import java.io.PrintWriter
+import java.io.StringWriter
 
 class MainActivity : ComponentActivity() {
 
@@ -44,6 +47,47 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 未捕获异常落盘，闪退也能拿到堆栈
+        CrashCatcher.install(applicationContext)
+
+        // 主动触发 ViewModel 创建：如果它的 init 抛异常，这里能接住并把错误显示出来，
+        // 而不是黑屏 0.5 秒直接退出、什么信息都留不下。
+        val bootError: String? = try {
+            vm
+            null
+        } catch (t: Throwable) {
+            val sw = StringWriter()
+            t.printStackTrace(PrintWriter(sw))
+            sw.toString()
+        }
+
+        if (bootError != null) {
+            setContent {
+                BonsaiTheme {
+                    Surface(
+                        Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text(
+                                "启动失败",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                bootError,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+            return
+        }
+
         setContent {
             BonsaiTheme {
                 MainTabs(vm) {
