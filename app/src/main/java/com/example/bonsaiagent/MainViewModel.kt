@@ -1122,9 +1122,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val p = f?.absolutePath ?: ""
+        val fname = f?.name ?: "（无）"
         updateSettings(settings.value.copy(draftPath = p, useDraft = f != null))
         if (!Llama.isLoaded()) {
-            status.value = if (f == null) "已清除草稿模型" else "已选草稿：${f.name}（加载主模型时自动挂上）"
+            status.value = if (f == null) "已清除草稿模型" else "已选草稿：$fname（加载主模型时自动挂上）"
             return
         }
         val s0 = settings.value
@@ -1134,13 +1135,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             status.value = "已关闭投机加速（回到单 token 生成）"
             return
         }
-        status.value = "正在挂草稿模型 ${f.name}…"
+        status.value = "正在挂草稿模型 $fname…"
         viewModelScope.launch(Dispatchers.IO) {
             val dth = (s0.threads / 2).coerceIn(1, 4)
             val dok = Llama.loadDraft(p, dth, s0.draftMax)
             withContext(Dispatchers.Main) {
                 status.value = if (dok) {
-                    "🚀 投机加速已开启：草稿 ${f.name}，γ=${s0.draftMax}\n" +
+                    "🚀 投机加速已开启：草稿 $fname，γ=${s0.draftMax}\n" +
                         "生成速度看日志里的「投机统计」接受率，低于 35% 就换个草稿模型"
                 } else {
                     "挂草稿失败：${Llama.getLastError()}\n（主模型不受影响，仍在单 token 生成）"
