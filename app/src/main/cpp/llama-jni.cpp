@@ -910,9 +910,18 @@ Java_com_example_bonsaiagent_llm_Llama_initDraft(
         return JNI_FALSE;
     }
 
+    // v10.73：门槛从 700MB 提到 2.5GB。
+    // 日志 058 的教训：草稿挂上后系统可用只剩 2278MB，Android 立刻把 mmap 的
+    // 主模型权重从页缓存里踢掉 —— 于是每生成一个 token 都要从闪存重读 2.3GB，
+    // prefill 从 30+ 掉到 10.8 tok/s，整体比不开还慢 6 倍。
+    // 宁可不开加速，也不能让主模型变慢。
     long mem = mem_available_mb();
-    if (mem > 0 && mem < 700) {
-        g_lastError = "可用内存只剩 " + std::to_string(mem) + " MB，先关掉后台应用再开加速";
+    if (mem > 0 && mem < 2500) {
+        char b[220];
+        snprintf(b, sizeof(b),
+                 "可用内存只剩 %ld MB（开加速至少要 2500 MB）——先关掉后台应用再试。\n"
+                 "原因：内存不够时系统会把主模型权重踢出缓存，开了反而更慢。", mem);
+        g_lastError = b;
         return JNI_FALSE;
     }
 
@@ -1296,6 +1305,26 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
         }
         if (n_gen % 4 == 0) {
             log_line("生成中… 第 %d 个 token，可用内存 %ld MB", n_gen, mem_available_mb());
+        }
+
+        // ===== v10.73：没挂草稿时，完全走 v10.70 的老路径 =====
+        // 上一版把「无投机」也统一改成了 batch + 显式 pos 的写法，逻辑等价，
+        // 但为了排除「是不是我改写循环导致变慢」这个变量，这里原样还原：
+        // 单次采样 → llama_batch_get_one → decode，一步不多。
+        if (!useDraft) {
+            llama_token next = llama_sampler_sample(smpl, st->ctx, -1);
+            if (next < 0) { log_line("!! 采样返回负数 id=%d，中止", next); break; }
+            if (emit(next, n_gen) != 0) break;
+            n_gen++;
+            llama_batch tb = llama_batch_get_one(&next, 1);
+            if (llama_decode(st->ctx, tb) != 0) {
+                g_lastError = "decode 失败";
+                log_line("[失败] decode 第 %d 个 token", n_gen - 1);
+                break;
+            }
+            n_past++;
+            if (n_past >= n_ctx - 1) break;
+            continue;
         }
 
         // ① 本块第一个 token：上一块遗留下来的，或现场采样
