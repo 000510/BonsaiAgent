@@ -80,11 +80,29 @@ object ModelLoader {
     }
 
     /**
-     * 默认加载哪个模型。
+     * 打开 App 时该加载哪个模型。
      *
-     * 原来是「取最新导入的」，于是导入 0.6B 草稿模型后，每次打开 App 默认加载的都是它。
-     * 改为取**体积最大**的 —— 主模型永远比草稿大，这样不必改动构造流程也能避开。
+     * 优先用「上次加载过的那个」（lastModelPath），文件还在就直接用它 ——
+     * 这是唯一可靠的办法：按最新导入会选到刚导入的草稿，按体积最大会选到全精度模型。
+     *
+     * 兜底：lastModelPath 为空或文件已删，则排除草稿后取体积最大的。
      */
+    fun resolveInitialModel(
+        context: Context,
+        lastModelPath: String?,
+        draftPath: String? = null
+    ): String? {
+        if (!lastModelPath.isNullOrBlank() && lastModelPath != draftPath) {
+            val f = File(lastModelPath)
+            if (f.exists() && f.length() > 0) return f.absolutePath
+        }
+        return listModels(context)
+            .filter { it.absolutePath != draftPath }
+            .maxByOrNull { it.length() }
+            ?.absolutePath
+    }
+
+    /** 兼容旧调用：排除草稿后取体积最大的 */
     fun currentModelPath(context: Context): String? =
         listModels(context).maxByOrNull { it.length() }?.absolutePath
 
