@@ -124,8 +124,13 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                     )
                 }
                 // v10.25：直接在这里加载/删除，不用再跑文件夹里挑
-                TextButton(onClick = { vm.loadModelFile(f) }) {
-                    Text("加载")
+                // v10.85：正在用的那个显示「已加载」并置灰，避免重复点
+                val isCurrent = vm.modelPath.value == f.absolutePath && vm.modelLoaded.value
+                TextButton(
+                    onClick = { vm.loadModelFile(f) },
+                    enabled = !isCurrent
+                ) {
+                    Text(if (isCurrent) "已加载" else "加载")
                 }
                 TextButton(onClick = { vm.deleteModelFile(f) }) {
                     Text("删除", color = MaterialTheme.colorScheme.error)
