@@ -32,7 +32,10 @@ data class AgentSettings(
     // 主模型一次前向验证 γ 个候选，把「读权重的带宽」摊薄，实测能提速 1.4~1.8 倍。
     val useDraft: Boolean = true,
     val draftPath: String = "",
-    val draftMax: Int = 3
+    val draftMax: Int = 3,
+
+    // v10.83：界面配色。每个预设一个种子色，theme.kt 按种子推导整套明暗色板。
+    val themePreset: String = "Moss"
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述。
@@ -106,6 +109,7 @@ class SettingsStore(context: Context) {
         useDraft = sp.getBoolean("useDraft", true),
         draftPath = sp.getString("draftPath", "") ?: "",
         draftMax = sp.getInt("draftMax", 3),
+        themePreset = sp.getString("themePreset", "Moss") ?: "Moss",
         apiEnabled = sp.getBoolean("apiEnabled", false),
         deepseekKey = sp.getString("deepseekKey", "") ?: "",
         apiBase = sp.getString("apiBase", "https://api.deepseek.com") ?: "https://api.deepseek.com",
@@ -125,6 +129,7 @@ class SettingsStore(context: Context) {
             putBoolean("useDraft", s.useDraft)
             putString("draftPath", s.draftPath)
             putInt("draftMax", s.draftMax)
+            putString("themePreset", s.themePreset)
             putString("systemPrompt", s.systemPrompt)
             putString("downloadSource", s.downloadSource)
             putBoolean("apiEnabled", s.apiEnabled)
