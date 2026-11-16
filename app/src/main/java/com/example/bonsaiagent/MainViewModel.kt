@@ -1009,6 +1009,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadModelFile(f: java.io.File) {
         if (!f.exists()) { status.value = "文件不见了：${f.name}"; refreshModels(); return }
+        // v10.85：同一个模型已经加载好了就直接返回 —— 重载一次要等好几秒，白折腾
+        if (modelPath.value == f.absolutePath && (Llama.isLoaded() || LiteRtEngine.isLoaded())) {
+            status.value = "「${f.name}」已经加载，无需重复加载"
+            return
+        }
         modelPath.value = f.absolutePath
         // v10.85：记住这次选的模型，下次打开 App 直接用它
         updateSettings(settings.value.copy(lastModelPath = f.absolutePath))
