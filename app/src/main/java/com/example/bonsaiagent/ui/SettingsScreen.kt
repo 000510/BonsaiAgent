@@ -66,8 +66,8 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         // v10.22：模型管理 —— 私有目录里的模型会一直堆着不删，
         // 实测堆到 11.83 GB（三值模型好几份 + 各家 gguf），把手机撑爆。
         Divider(Modifier.padding(vertical = 4.dp))
-        Text("已导入模型（${vm.modelFiles.size}）", style = MaterialTheme.typography.titleSmall)
-        vm.modelFiles.forEach { f ->
+        Text("主模型（${vm.mainModelFiles.size}）", style = MaterialTheme.typography.titleSmall)
+        vm.mainModelFiles.forEach { f ->
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -89,8 +89,42 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                 }
             }
         }
-        if (vm.modelFiles.isEmpty()) {
-            Text("（还没有导入任何模型）", style = MaterialTheme.typography.bodySmall)
+        if (vm.mainModelFiles.isEmpty()) {
+            Text("（还没有导入主模型）", style = MaterialTheme.typography.bodySmall)
+        }
+
+        // v10.81：草稿模型单独成组 —— 它们只服务于投机解码，不能当主模型对话
+        if (vm.draftModelFiles.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "草稿模型 · 投机加速用（${vm.draftModelFiles.size}）",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.secondary
+            )
+            Text(
+                "这些是体积小的草稿模型，只给主模型「猜下一句」用，不能直接对话。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            vm.draftModelFiles.forEach { f ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(f.name, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "${ModelLoader.sizeText(f.length())} · 正在作为草稿",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                    TextButton(onClick = { vm.setDraftModel(null) }) { Text("取消草稿") }
+                    TextButton(onClick = { vm.deleteModelFile(f) }) {
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
         }
         Divider(Modifier.padding(vertical = 4.dp))
 
@@ -144,10 +178,10 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                 }
             }
         }
-        Text("从已导入模型里选草稿：", style = MaterialTheme.typography.bodySmall)
-        val draftCandidates = vm.modelFiles.filter {
+        Text("从主模型里挑一个当草稿（建议选体积最小的同家族模型）：", style = MaterialTheme.typography.bodySmall)
+        val draftCandidates = vm.mainModelFiles.filter {
             it.name.endsWith(".gguf", true) && it.absolutePath != vm.modelPath.value
-        }
+        }.sortedBy { it.length() }
         if (draftCandidates.isEmpty()) {
             Text("（没有其它 gguf —— 先导入一个 Qwen3-0.6B）",
                 style = MaterialTheme.typography.labelSmall,
