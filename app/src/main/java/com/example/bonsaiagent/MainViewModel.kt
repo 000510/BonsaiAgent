@@ -124,6 +124,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // v10.0：后台扫一遍手机里装了哪些应用，给「打开微信」这类指令用。
         // 有缓存就直接读缓存（毫秒级），没缓存才真的去问系统。
         refreshModels()
+        sanitizeModelRoles()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val n = AppIndex.all(getApplication()).size
@@ -467,6 +468,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 从系统选择器导入 .gguf 并加载 */
+    /**
+     * v10.86：启动自检 —— 主模型/草稿颠倒时自动掰回来。
+     *
+     * 界面里两个模型各有一个「加载」按钮，很容易把小的那个点成主模型、
+     * 再把大的设成草稿。这样推理时会拿 2.3GB 的模型去猜候选，
+     * 比不加速还慢十倍，而且内存直接爆掉 —— 用户只会看到"卡死"。
+     */
+    private fun sanitizeModelRoles() {
+        val mPath = modelPath.value ?: return
+        val dp = settings.value.draftPath
+        if (dp.isBlank() || dp == mPath) return
+        val main = java.io.File(mPath)
+        val draft = java.io.File(dp)
+        if (!main.exists() || !draft.exists()) return
+        if (draft.length() <= main.length()) return   // 正常：草稿更小
+
+        // 反了 —— 大的当主模型，小的当草稿
+        modelPath.value = draft.absolutePath
+        updateSettings(
+            settings.value.copy(
+                draftPath = main.absolutePath,
+                lastModelPath = draft.absolutePath
+            )
+        )
+        status.value = "已自动纠正主模型/草稿颠倒：\n" +
+                "主模型 ${draft.name}（${ModelLoader.sizeText(draft.length())}）\n" +
+                "草稿 ${main.name}（${ModelLoader.sizeText(main.length())}）"
+    }
+
     fun refreshModels() {
         modelFiles.clear()
         modelFiles.addAll(ModelLoader.listModels(getApplication()))
@@ -1009,6 +1039,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadModelFile(f: java.io.File) {
         if (!f.exists()) { status.value = "文件不见了：${f.name}"; refreshModels(); return }
+        // v10.86：这个模型正被当草稿用的话，先解除它的草稿身份，
+        // 否则会出现「主模型是草稿、草稿是主模型」的颠倒状态
+        if (settings.value.draftPath == f.absolutePath) {
+            updateSettings(settings.value.copy(draftPath = "", useDraft = false))
+            try { Llama.loadDraft(null, 1, settings.value.draftMax) } catch (_: Throwable) {}
+        }
         // v10.85：同一个模型已经加载好了就直接返回 —— 重载一次要等好几秒，白折腾
         if (modelPath.value == f.absolutePath && (Llama.isLoaded() || LiteRtEngine.isLoaded())) {
             status.value = "「${f.name}」已经加载，无需重复加载"
@@ -1159,6 +1195,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (genStatus.value.phase == "生成中") {
             status.value = "正在生成，等这句说完再切换草稿模型"
             return
+        }
+        // v10.86：草稿必须是更小的那个模型。
+        // 投机解码的收益来自「小模型猜、大模型验」，
+        // 反过来的话每轮拿 2.3GB 的模型去猜 3 个候选，比不加速还慢十倍。
+        if (f != null) {
+            val mainLen = modelPath.value?.let { java.io.File(it).length() } ?: 0L
+            if (mainLen > 0L && f.length() >= mainLen) {
+                status.value = "「${f.name}」比当前主模型还大，不能当草稿。\n" +
+                        "投机解码要用小模型猜、大模型验证 —— 反过来会比不加速慢十倍。\n" +
+                        "正确做法：先把大模型加载为主模型，再选小的当草稿。"
+                return
+            }
+            if (f.absolutePath == modelPath.value) {
+                status.value = "「${f.name}」正在当主模型，不能同时当草稿"
+                return
+            }
         }
         val p = f?.absolutePath ?: ""
         val fname = f?.name ?: "（无）"
