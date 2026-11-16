@@ -52,7 +52,15 @@ class MainActivity : ComponentActivity() {
         } catch (t: Throwable) {
             val sw = StringWriter()
             t.printStackTrace(PrintWriter(sw))
-            CrashCatcher.mark(applicationContext, "4X ViewModel 创建失败: ${t.javaClass.simpleName}: ${t.message}")
+            // ViewModelProvider 会把真因包一层，这里把 cause 链也展开
+            var c: Throwable? = t.cause
+            var depth = 0
+            while (c != null && depth < 5) {
+                sw.append("\n----- cause ${++depth} -----\n")
+                c.printStackTrace(PrintWriter(sw))
+                c = c.cause
+            }
+            CrashCatcher.mark(applicationContext, "4X ViewModel 创建失败:\n$sw")
             sw.toString()
         }
 
