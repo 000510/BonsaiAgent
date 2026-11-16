@@ -1,6 +1,10 @@
 package com.example.bonsaiagent.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -13,8 +17,11 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.bonsaiagent.MainViewModel
 import com.example.bonsaiagent.llm.ModelLoader
 import com.example.bonsaiagent.data.AgentSettings
@@ -30,6 +37,42 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         Modifier.fillMaxSize().padding(16.dp).verticalScroll(scroll),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // v10.83：界面配色，点一下即时生效并落盘
+        Text("界面配色", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "点色块即时切换，选择会保存。深色模式自动适配。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            THEME_PRESETS.forEach { p ->
+                val on = s.themePreset == p.key
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Color(p.seed))
+                            .clickable { vm.updateSettings(s.copy(themePreset = p.key)) }
+                            .then(
+                                if (on) Modifier.border(2.dp, MaterialTheme.colorScheme.onBackground, CircleShape)
+                                else Modifier
+                            )
+                    )
+                    Text(
+                        p.label,
+                        fontSize = 9.sp,
+                        color = if (on) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        Divider(Modifier.padding(vertical = 4.dp))
+
         Text("模型", style = MaterialTheme.typography.titleMedium)
         Text(vm.modelPath.value ?: "未导入模型", style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
