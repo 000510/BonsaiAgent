@@ -103,6 +103,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     val modelFiles = mutableStateListOf<java.io.File>()
 
+    /**
+     * v10.81：模型列表拆成两组。
+     *
+     * 起因：投机解码要导入 0.6B 草稿模型，它和主模型存在同一个目录，
+     * 设置页把两者混在一个列表里 —— 点「加载」很容易加载到 0.6B。
+     * 现在 mainModelFiles 只放主模型，draftModelFiles 单独成组显示。
+     */
+    val mainModelFiles = mutableStateListOf<java.io.File>()
+    val draftModelFiles = mutableStateListOf<java.io.File>()
+
     init {
         // v10.0：后台扫一遍手机里装了哪些应用，给「打开微信」这类指令用。
         // 有缓存就直接读缓存（毫秒级），没缓存才真的去问系统。
@@ -453,6 +463,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshModels() {
         modelFiles.clear()
         modelFiles.addAll(ModelLoader.listModels(getApplication()))
+
+        // v10.81：按草稿路径分组，避免 0.6B 混在主模型列表里被误加载
+        val draftPath = settings.value.draftPath
+        mainModelFiles.clear()
+        mainModelFiles.addAll(modelFiles.filter { it.absolutePath != draftPath })
+        draftModelFiles.clear()
+        draftModelFiles.addAll(modelFiles.filter { it.absolutePath == draftPath })
     }
 
     /**
