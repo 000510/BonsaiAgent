@@ -80,7 +80,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     val settings = mutableStateOf(store.load())
-    val modelPath = mutableStateOf(ModelLoader.currentModelPath(app))
+    // v10.85：优先恢复上次加载的模型；没有记录才退回「排除草稿后取最大」
+    val modelPath = mutableStateOf(
+        ModelLoader.resolveInitialModel(
+            app,
+            settings.value.lastModelPath,
+            settings.value.draftPath
+        )
+    )
     val modelLoaded = mutableStateOf(Llama.isLoaded())
     val status = mutableStateOf("欢迎使用 BonsaiAgent")
     // v6.0：界面状态条用的实时状态（替代原来刷屏的实时日志）
@@ -1003,6 +1010,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadModelFile(f: java.io.File) {
         if (!f.exists()) { status.value = "文件不见了：${f.name}"; refreshModels(); return }
         modelPath.value = f.absolutePath
+        // v10.85：记住这次选的模型，下次打开 App 直接用它
+        updateSettings(settings.value.copy(lastModelPath = f.absolutePath))
         status.value = "正在加载 ${f.name}…"
         loadModel()
     }
@@ -1012,6 +1021,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ok = ModelLoader.deleteModel(f)
         if (ok && wasCurrent) {
             modelPath.value = ModelLoader.currentModelPath(getApplication())
+            // 删掉的就是上次加载的那个，清掉记录免得下次指向空气
+            if (settings.value.lastModelPath == f.absolutePath) {
+                updateSettings(settings.value.copy(lastModelPath = ""))
+            }
             try { Llama.unload() } catch (_: Throwable) {}
             try { LiteRtEngine.unload() } catch (_: Throwable) {}
             modelLoaded.value = false
@@ -1027,6 +1040,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 refreshModels()
                 if (p != null) {
                     modelPath.value = p
+                    // v10.85：导入即加载，同时记成「上次加载的」
+                    updateSettings(settings.value.copy(lastModelPath = p))
                     status.value = "模型已导入，正在加载…"
                     loadModel()
                 } else {
