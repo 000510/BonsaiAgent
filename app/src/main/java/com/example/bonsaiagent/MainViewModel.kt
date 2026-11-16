@@ -1280,6 +1280,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val t0 = System.currentTimeMillis()
             var firstTokAt = 0L
             var tokCount = 0
+            // v10.84：UI 刷新节流。原来每来一个字都要把整段 buffer 重新解析一遍
+            // （O(n²)，长文本时第 500 字要扫 500 字），还往主线程塞一个任务。
+            // 现在最多每 60ms 解析+刷新一次，推理线程不再被自己的日志拖慢。
+            var lastUiAt = 0L
             // 推理要用大栈线程：llama.cpp 的计算在调用线程栈上跑，默认 1MB 容易溢出
             val worker = Thread(null, Runnable {
                 Llama.generate(sysPrefix, prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
@@ -1287,18 +1291,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     tokCount++
                     // 速度只从"第一个字出来之后"开始算，否则会把 prefill 时间摊进去，显得很慢
                     if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()
-                    val (answer, thinking) = extractAnswer(buf.toString())
-                    val show = if (thinking) "（思考中…）" else answer
-                    val sec = (System.currentTimeMillis() - firstTokAt) / 1000.0
-                    val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
-                    val snap = GenStatus(if (thinking) "思考中" else "生成中", speed, tokCount, show.length)
-                    mainHandler.post {
-                        // ★ v10.11：对话页必须实时显示内容。
-                        // v10.4 那次改动本意只针对路由页（那里模型会复读提示词），
-                        // 但批量替换把对话页这一处也改了 ——
-                        // 结果对话页生成时界面一片空白，表现就是"吞回答"。
-                        ai.content.value = show
-                        genStatus.value = snap
+                    val now = System.currentTimeMillis()
+                    if (now - lastUiAt >= 60L) {
+                        lastUiAt = now
+                        val (answer, thinking) = extractAnswer(buf.toString())
+                        val show = if (thinking) "（思考中…）" else answer
+                        val sec = (now - firstTokAt) / 1000.0
+                        val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
+                        val snap = GenStatus(if (thinking) "思考中" else "生成中", speed, tokCount, show.length)
+                        mainHandler.post {
+                            ai.content.value = show
+                            genStatus.value = snap
+                        }
                     }
                 }
             }, "llama-gen")   // v2.2: 回退自定义栈大小(32MB)，用默认栈
@@ -1312,11 +1316,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 delay(120)
             }
             worker.join()
-            // 兜底：万一流式回调一个字都没写进去（比如首字就被裁掉），
-            // 这里用完整缓冲再落一次，保证界面上不会只剩一个省略号
-            if (ai.content.value.isBlank()) {
-                mainHandler.post { ai.content.value = extractAnswer(buf.toString()).first }
-            }
+            // v10.84：节流会漏掉最后几十毫秒的字，收尾时用完整缓冲补一次，
+            // 保证界面上显示的是全文（顺带修了原来"一个字都没写进去"的兜底）
+            mainHandler.post { ai.content.value = extractAnswer(buf.toString()).first }
             val st = genStatus.value
             mainHandler.post { genStatus.value = st.copy(phase = "完成") }
         }
