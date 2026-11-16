@@ -79,9 +79,14 @@ object ModelLoader {
         false
     }
 
-    /** 已导入模型的本地路径（取最新的） */
+    /**
+     * 默认加载哪个模型。
+     *
+     * 原来是「取最新导入的」，于是导入 0.6B 草稿模型后，每次打开 App 默认加载的都是它。
+     * 改为取**体积最大**的 —— 主模型永远比草稿大，这样不必改动构造流程也能避开。
+     */
     fun currentModelPath(context: Context): String? =
-        listModels(context).firstOrNull()?.absolutePath
+        listModels(context).maxByOrNull { it.length() }?.absolutePath
 
     fun sizeText(bytes: Long): String = fmt(bytes)
 
