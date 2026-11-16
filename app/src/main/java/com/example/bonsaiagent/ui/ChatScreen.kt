@@ -1,5 +1,8 @@
 package com.example.bonsaiagent.ui
 
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,6 +13,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.example.bonsaiagent.ChatMessage
 import com.example.bonsaiagent.MainViewModel
@@ -58,22 +64,49 @@ fun ChatScreen(vm: MainViewModel) {
     }
 }
 
+/**
+ * 聊天气泡。
+ *
+ * v10.83：用户消息右下角收尖、助手左下角收尖（模仿对话方向），
+ * 最大宽度 320dp 避免长消息顶满整行，长按整条复制。
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun Bubble(msg: ChatMessage) {
     val isUser = msg.role == "user"
+    val text = msg.content.value
+    val ctx = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val cs = MaterialTheme.colorScheme
+
+    val shape = if (isUser) {
+        RoundedCornerShape(16.dp, 16.dp, 5.dp, 16.dp)
+    } else {
+        RoundedCornerShape(16.dp, 16.dp, 16.dp, 5.dp)
+    }
+
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
         Surface(
-            color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .widthIn(max = 320.dp)
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = {
+                        clipboard.setText(AnnotatedString(text))
+                        Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show()
+                    }
+                ),
+            color = if (isUser) cs.primary else cs.surfaceVariant,
+            shape = shape,
             tonalElevation = 2.dp
         ) {
             Text(
-                text = msg.content.value.ifBlank { "…" },
-                modifier = Modifier.padding(10.dp),
-                color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                text = text.ifBlank { "…" },
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                color = if (isUser) cs.onPrimary else cs.onSurfaceVariant
             )
         }
     }
