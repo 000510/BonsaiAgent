@@ -35,7 +35,11 @@ data class AgentSettings(
     val draftMax: Int = 3,
 
     // v10.83：界面配色。每个预设一个种子色，theme.kt 按种子推导整套明暗色板。
-    val themePreset: String = "Moss"
+    val themePreset: String = "Moss",
+
+    // v10.85：上次成功加载的主模型路径。打开 App 时优先恢复它，
+    // 不再靠「猜」——之前按最新导入或体积最大猜，都会误选到别的模型。
+    val lastModelPath: String = ""
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述。
@@ -110,6 +114,7 @@ class SettingsStore(context: Context) {
         draftPath = sp.getString("draftPath", "") ?: "",
         draftMax = sp.getInt("draftMax", 3),
         themePreset = sp.getString("themePreset", "Moss") ?: "Moss",
+        lastModelPath = sp.getString("lastModelPath", "") ?: "",
         apiEnabled = sp.getBoolean("apiEnabled", false),
         deepseekKey = sp.getString("deepseekKey", "") ?: "",
         apiBase = sp.getString("apiBase", "https://api.deepseek.com") ?: "https://api.deepseek.com",
@@ -130,6 +135,7 @@ class SettingsStore(context: Context) {
             putString("draftPath", s.draftPath)
             putInt("draftMax", s.draftMax)
             putString("themePreset", s.themePreset)
+            putString("lastModelPath", s.lastModelPath)
             putString("systemPrompt", s.systemPrompt)
             putString("downloadSource", s.downloadSource)
             putBoolean("apiEnabled", s.apiEnabled)
