@@ -67,6 +67,15 @@ class ChatMessage(val role: String) {
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = SettingsStore(app)
+
+    /** 直接持有构造参数，避免早期 getApplication() 时机问题 */
+    private val appRef: android.app.Application = app
+
+    /** 日志统一放 files/logs，别散在 files 根目录 */
+    private val logDir: java.io.File
+        get() = java.io.File(appRef.filesDir, "logs").apply { if (!exists()) mkdirs() }
+
+    private fun logFile(name: String) = java.io.File(logDir, name)
     private var apiServer: LocalApiServer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -107,9 +116,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         // 原生层崩过 / 上次运行到哪一步，这里能直接看到
-        val crashFile = java.io.File(app.filesDir, "last_crash.txt")
-        val logFile = java.io.File(app.filesDir, "run_log.txt")
-        val errFile = java.io.File(app.filesDir, "native_stderr.txt")
+        val crashFile = logFile("last_crash.txt")
+        val logFile = logFile("run_log.txt")
+        val errFile = logFile("native_stderr.txt")
         // v6.3：崩溃记录读完不再删除，留一份给"分享诊断"，否则点按钮时已经没了
         val crash = if (crashFile.exists()) {
             try { crashFile.readText().trim() } catch (e: Throwable) { "" }
@@ -138,7 +147,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val lc = dumpLogcat()
             if (lc.isNotBlank()) {
                 try {
-                    java.io.File(app.filesDir, "logcat_dump.txt").writeText(lc)
+                    logFile("logcat_dump.txt").writeText(lc)
                 } catch (e: Throwable) { /* 忽略 */ }
                 mainHandler.post {
                     status.value = status.value + "\n\n===== 系统日志 =====\n" + lc
@@ -182,7 +191,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 读某个诊断文件的末尾 n 行 */
     private fun readFileTail(name: String, n: Int): String = try {
-        val f = java.io.File(getApplication<android.app.Application>().filesDir, name)
+        val f = logFile(name)
         if (!f.exists()) "" else f.readLines().takeLast(n).joinToString("\n")
     } catch (e: Throwable) { "" }
 
@@ -225,7 +234,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // ★ 同时写进 run_log.txt —— 状态栏文字不会进诊断，
             // 上一版探测过一次，但导出诊断里什么都没有，白跑一趟。
             try {
-                val lf = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
+                val lf = logFile("run_log.txt")
                 lf.appendText("\n=== NPU 库探测 ===\n" + sb.toString())
             } catch (_: Throwable) {}
 
@@ -277,7 +286,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             )
             try {
-                val lf = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
+                val lf = logFile("run_log.txt")
                 lf.appendText("\n" + sb.toString())
             } catch (_: Throwable) {}
 
@@ -321,7 +330,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // 线程/上下文相关的行最关键，单独捞出来，避免被最近 40 行挤掉
         try {
-            val all = java.io.File(app.filesDir, "run_log.txt")
+            val all = logFile("run_log.txt")
             if (all.exists()) {
                 val key = all.readLines().filter {
                     it.contains("上下文就绪") || it.contains("n_threads") || it.contains("线程") ||
@@ -344,12 +353,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // v10.35：run_log 只截末尾 40 行太短，NPU 扫描结果会被挤掉。
         // 从"全系统库目录扫描"那句开始，把后面整段原样带出来。
         try {
-            val full = java.io.File(
-                getApplication<android.app.Application>().filesDir, "run_log.txt").readText()
+            val full = logFile("run_log.txt").readText()
             // v10.38：bridge 轨迹只有全量才看得出卡在哪个函数
             try {
-                val bl = java.io.File(
-                    getApplication<android.app.Application>().filesDir, "npu_bridge.log")
+                val bl = logFile("npu_bridge.log")
                 if (bl.exists()) {
                     val all = bl.readLines()
                     // v10.51：建图统计必须单独提出来，否则会被后面的调用栈挤掉
@@ -382,7 +389,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // 读全文而不是尾部：崩溃栈 #00 在开头，截尾会把最关键的帧丢掉
         val lc = try {
-            val f = java.io.File(getApplication<android.app.Application>().filesDir, "logcat_dump.txt")
+            val f = logFile("logcat_dump.txt")
             if (f.exists()) f.readText().trim() else ""
         } catch (e: Throwable) { "" }
         if (lc.isNotBlank()) {
@@ -394,7 +401,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 读 run_log.txt 尾部若干行 */
     private fun readLogTail(n: Int = 30): String = try {
-        val f = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
+        val f = logFile("run_log.txt")
         if (!f.exists()) "" else f.readLines().takeLast(n).joinToString("\n")
     } catch (e: Throwable) { "" }
 
@@ -548,8 +555,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val src = java.io.File("/vendor/lib64/libneuron_runtime.7.so")
             if (src.exists() && src.canRead()) {
                 try {
-                    val dst = java.io.File(
-                        getApplication<android.app.Application>().filesDir, "npu_probe.so")
+                    val dst = logFile("npu_probe.so")
                     src.inputStream().use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
                     sb.appendLine("复制成功：${dst.length()} 字节（说明可读）")
                 } catch (t: Throwable) {
@@ -604,8 +610,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     sb.appendLine("${f.name}: 跳过（不可读或 0 字节）")
                     continue
                 }
-                val dst = java.io.File(
-                    getApplication<android.app.Application>().filesDir, f.name)
+                val dst = logFile(f.name)
                 try {
                     f.inputStream().use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
                     sb.appendLine("${f.name} 复制 ${dst.length()} 字节 → ${Llama.probeDlopen(dst.absolutePath)}")
@@ -619,8 +624,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // ⑦ v10.29【决定性】runtime 里还有没有可用的 C API
             // 有 → 可以自己写 adapter 顶替那个被裁掉的空壳；没有 → NPU 彻底封死
             sb.appendLine("--- runtime 导出符号 ---")
-            val rtFile = java.io.File(
-                getApplication<android.app.Application>().filesDir, "libneuron_runtime.7.so")
+            val rtFile = logFile("libneuron_runtime.7.so")
             if (!rtFile.exists() || rtFile.length() == 0L) {
                 sb.appendLine("运行时副本不存在（上一步复制失败），无法解析")
             } else {
@@ -659,8 +663,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (ownAdapter != null) "自造 adapter：已在 APK 内（${ownAdapter.length()} 字节）"
                 else "自造 adapter：❌ 不在 APK 内"
             )
-            val adaLog = java.io.File(
-                getApplication<android.app.Application>().filesDir, "npu_bridge.log")
+            val adaLog = logFile("npu_bridge.log")
             if (adaLog.exists()) {
                 sb.appendLine("adapter 调用日志：${adaLog.length()} 字节，最后 20 行：")
                 try {
@@ -672,8 +675,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
 
             try {
-                val lf = java.io.File(
-                    getApplication<android.app.Application>().filesDir, "run_log.txt")
+                val lf = logFile("run_log.txt")
                 lf.appendText("\n" + sb.toString())
             } catch (_: Throwable) {}
 
@@ -690,7 +692,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun probeNpuRun() {
         viewModelScope.launch(Dispatchers.IO) {
             val app = getApplication<android.app.Application>()
-            val lf = java.io.File(app.filesDir, "run_log.txt")
+            val lf = logFile("run_log.txt")
             val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
 
             // v10.32：每一步立刻落盘 —— 之前是攒到最后一次性写，
@@ -742,7 +744,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             step("--- 扫描结束 ---")
 
-            val adaLog = java.io.File(app.filesDir, "npu_bridge.log")
+            val adaLog = logFile("npu_bridge.log")
             try { if (adaLog.exists()) adaLog.delete() } catch (_: Throwable) {}
 
             val models = java.io.File(app.filesDir, "models").listFiles()
@@ -825,7 +827,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         benchRunning = true
         viewModelScope.launch(Dispatchers.IO) {
             val app = getApplication<android.app.Application>()
-            val lf = java.io.File(app.filesDir, "run_log.txt")
+            val lf = logFile("run_log.txt")
             val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
             fun step(msg: String) {
                 try { lf.appendText("[测速 ${fmt.format(java.util.Date())}] $msg\n") } catch (_: Throwable) {}
@@ -920,7 +922,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             step("⚠ ${m.length() / 1048576}MB 大模型，首次加载要做设备端编译，可能要 1~3 分钟，别切后台")
         }
         step("正在以 NPU 后端加载…")
-        val lf0 = java.io.File(app.filesDir, "run_log.txt")
+        val lf0 = logFile("run_log.txt")
         // v10.66：加载大模型时开个看门狗，每 2 秒记一次内存。
         // 如果进程是被内存挤死的，日志里能看到最后冲到多少。
         val watchdog = Thread {
