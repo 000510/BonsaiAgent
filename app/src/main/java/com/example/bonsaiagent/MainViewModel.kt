@@ -67,43 +67,11 @@ class ChatMessage(val role: String) {
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = SettingsStore(app)
-
-    /** 直接持有构造参数，避免 init 早期 getApplication() 返回 null 导致 NPE 闪退 */
-    private val appRef: android.app.Application = app
-
-    /**
-     * v10.76：日志、崩溃记录、临时库统一收进 files/logs/。
-     * 之前 run_log.txt / last_crash.txt / native_stderr.txt / npu_bridge.log 全堆在
-     * files 根目录，和 models/ 目录混在一起，翻起来很乱。
-     */
-    private val logDir: java.io.File
-        get() = logFile("logs")
-            .apply { if (!exists()) mkdirs() }
-
-    private fun logFile(name: String) = java.io.File(logDir, name)
-
-    /** v10.76：把旧版本散在 files 根目录的日志搬进 logs/ */
-    private fun migrateLegacyLogs() {
-        runCatching {
-            val root = appRef.filesDir
-            listOf(
-                "run_log.txt", "last_crash.txt", "native_stderr.txt",
-                "logcat_dump.txt", "npu_bridge.log"
-            ).forEach { n ->
-                val old = java.io.File(root, n)
-                if (!old.exists()) return@forEach
-                val dst = java.io.File(logDir, n)
-                if (dst.exists()) old.delete() else old.renameTo(dst)
-            }
-        }
-    }
     private var apiServer: LocalApiServer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     val settings = mutableStateOf(store.load())
-    // v10.76：排除草稿模型 —— 否则导入 0.6B 草稿后，它成了「最新导入」，
-    // 每次打开 App 默认加载的就是 0.6B 而不是真正的主模型。
-    val modelPath = mutableStateOf(ModelLoader.currentModelPath(app, store.load().draftPath))
+    val modelPath = mutableStateOf(ModelLoader.currentModelPath(app))
     val modelLoaded = mutableStateOf(Llama.isLoaded())
     val status = mutableStateOf("欢迎使用 BonsaiAgent")
     // v6.0：界面状态条用的实时状态（替代原来刷屏的实时日志）
@@ -126,22 +94,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     val modelFiles = mutableStateListOf<java.io.File>()
 
-    /**
-     * v10.76：拆成两个列表。
-     *
-     * 起因：投机解码要导入一个 0.6B 草稿模型，它和主模型存在同一个目录里，
-     * 设置页把两者混在一个「已导入模型」列表里 —— 点「加载」很容易加载到 0.6B，
-     * 而且 currentModelPath 取「最新导入」，让 App 每次启动都默认选中草稿模型。
-     *
-     * 现在：mainModelFiles 给主模型用，draftModelFiles 单独成组显示。
-     */
-    val mainModelFiles = mutableStateListOf<java.io.File>()
-    val draftModelFiles = mutableStateListOf<java.io.File>()
-
     init {
-        // v10.76：旧日志散在 files 根目录，统一搬进 logs/
-        migrateLegacyLogs()
-
         // v10.0：后台扫一遍手机里装了哪些应用，给「打开微信」这类指令用。
         // 有缓存就直接读缓存（毫秒级），没缓存才真的去问系统。
         refreshModels()
@@ -154,9 +107,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         // 原生层崩过 / 上次运行到哪一步，这里能直接看到
-        val crashFile = logFile("last_crash.txt")
-        val runLogFile = logFile("run_log.txt")
-        val errFile = logFile("native_stderr.txt")
+        val crashFile = java.io.File(app.filesDir, "last_crash.txt")
+        val logFile = java.io.File(app.filesDir, "run_log.txt")
+        val errFile = java.io.File(app.filesDir, "native_stderr.txt")
         // v6.3：崩溃记录读完不再删除，留一份给"分享诊断"，否则点按钮时已经没了
         val crash = if (crashFile.exists()) {
             try { crashFile.readText().trim() } catch (e: Throwable) { "" }
@@ -164,8 +117,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         lastCrash.value = crash
         // v6.3：界面上只留摘要。完整内容点"分享诊断"一键带走，
         // 不用再在手机上长按拖选几百行日志。
-        val log = if (runLogFile.exists()) {
-            try { runLogFile.readLines().filter { it.isNotBlank() }.takeLast(6).joinToString("\n") } catch (e: Throwable) { "" }
+        val log = if (logFile.exists()) {
+            try { logFile.readLines().filter { it.isNotBlank() }.takeLast(6).joinToString("\n") } catch (e: Throwable) { "" }
         } else ""
         val tail = buildString {
             if (log.isNotEmpty()) append("\n\n最近日志：\n").append(log)
@@ -185,7 +138,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val lc = dumpLogcat()
             if (lc.isNotBlank()) {
                 try {
-                    logFile("logcat_dump.txt").writeText(lc)
+                    java.io.File(app.filesDir, "logcat_dump.txt").writeText(lc)
                 } catch (e: Throwable) { /* 忽略 */ }
                 mainHandler.post {
                     status.value = status.value + "\n\n===== 系统日志 =====\n" + lc
@@ -229,7 +182,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 读某个诊断文件的末尾 n 行 */
     private fun readFileTail(name: String, n: Int): String = try {
-        val f = logFile(name)
+        val f = java.io.File(getApplication<android.app.Application>().filesDir, name)
         if (!f.exists()) "" else f.readLines().takeLast(n).joinToString("\n")
     } catch (e: Throwable) { "" }
 
@@ -272,7 +225,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // ★ 同时写进 run_log.txt —— 状态栏文字不会进诊断，
             // 上一版探测过一次，但导出诊断里什么都没有，白跑一趟。
             try {
-                val lf = logFile("run_log.txt")
+                val lf = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
                 lf.appendText("\n=== NPU 库探测 ===\n" + sb.toString())
             } catch (_: Throwable) {}
 
@@ -324,7 +277,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             )
             try {
-                val lf = logFile("run_log.txt")
+                val lf = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
                 lf.appendText("\n" + sb.toString())
             } catch (_: Throwable) {}
 
@@ -346,7 +299,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun buildDiagnostics(): String {
         val sb = StringBuilder()
-        val app = appRef
+        val app = getApplication<android.app.Application>()
         sb.appendLine("=== Bonsai Lite 诊断 ===")
         val dfNow = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.CHINA)
         sb.appendLine("时间: " + dfNow.format(java.util.Date()))
@@ -368,7 +321,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // 线程/上下文相关的行最关键，单独捞出来，避免被最近 40 行挤掉
         try {
-            val all = logFile("run_log.txt")
+            val all = java.io.File(app.filesDir, "run_log.txt")
             if (all.exists()) {
                 val key = all.readLines().filter {
                     it.contains("上下文就绪") || it.contains("n_threads") || it.contains("线程") ||
@@ -391,10 +344,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // v10.35：run_log 只截末尾 40 行太短，NPU 扫描结果会被挤掉。
         // 从"全系统库目录扫描"那句开始，把后面整段原样带出来。
         try {
-            val full = logFile("run_log.txt").readText()
+            val full = java.io.File(
+                getApplication<android.app.Application>().filesDir, "run_log.txt").readText()
             // v10.38：bridge 轨迹只有全量才看得出卡在哪个函数
             try {
-                val bl = logFile("npu_bridge.log")
+                val bl = java.io.File(
+                    getApplication<android.app.Application>().filesDir, "npu_bridge.log")
                 if (bl.exists()) {
                     val all = bl.readLines()
                     // v10.51：建图统计必须单独提出来，否则会被后面的调用栈挤掉
@@ -427,7 +382,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // 读全文而不是尾部：崩溃栈 #00 在开头，截尾会把最关键的帧丢掉
         val lc = try {
-            val f = logFile("logcat_dump.txt")
+            val f = java.io.File(getApplication<android.app.Application>().filesDir, "logcat_dump.txt")
             if (f.exists()) f.readText().trim() else ""
         } catch (e: Throwable) { "" }
         if (lc.isNotBlank()) {
@@ -439,7 +394,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 读 run_log.txt 尾部若干行 */
     private fun readLogTail(n: Int = 30): String = try {
-        val f = logFile("run_log.txt")
+        val f = java.io.File(getApplication<android.app.Application>().filesDir, "run_log.txt")
         if (!f.exists()) "" else f.readLines().takeLast(n).joinToString("\n")
     } catch (e: Throwable) { "" }
 
@@ -491,18 +446,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshModels() {
         modelFiles.clear()
         modelFiles.addAll(ModelLoader.listModels(getApplication()))
-
-        val draftPath = settings.value.draftPath
-        mainModelFiles.clear()
-        mainModelFiles.addAll(modelFiles.filter { it.absolutePath != draftPath })
-        draftModelFiles.clear()
-        draftModelFiles.addAll(modelFiles.filter { it.absolutePath == draftPath })
-
-        // 默认指针如果指向了草稿模型，纠正成体积最大的主模型
-        val cur = modelPath.value
-        if (cur != null && cur == draftPath) {
-            modelPath.value = ModelLoader.currentModelPath(getApplication(), draftPath)
-        }
     }
 
     /**
@@ -550,7 +493,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             // ⓪ v10.28：先确认 Google 官方 NPU 运行时有没有打进 APK
             sb.appendLine("--- App 自带库（nativeLibraryDir）---")
-            val libDir = appRef.applicationInfo.nativeLibraryDir
+            val libDir = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
             val appLibs = try { java.io.File(libDir).listFiles() } catch (_: Throwable) { null } ?: emptyArray()
             sb.appendLine("$libDir 共 ${appLibs.size} 个")
             val npuOwn = appLibs.filter {
@@ -605,7 +548,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val src = java.io.File("/vendor/lib64/libneuron_runtime.7.so")
             if (src.exists() && src.canRead()) {
                 try {
-                    val dst = logFile("npu_probe.so")
+                    val dst = java.io.File(
+                        getApplication<android.app.Application>().filesDir, "npu_probe.so")
                     src.inputStream().use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
                     sb.appendLine("复制成功：${dst.length()} 字节（说明可读）")
                 } catch (t: Throwable) {
@@ -660,7 +604,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     sb.appendLine("${f.name}: 跳过（不可读或 0 字节）")
                     continue
                 }
-                val dst = logFile(f.name)
+                val dst = java.io.File(
+                    getApplication<android.app.Application>().filesDir, f.name)
                 try {
                     f.inputStream().use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
                     sb.appendLine("${f.name} 复制 ${dst.length()} 字节 → ${Llama.probeDlopen(dst.absolutePath)}")
@@ -674,7 +619,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // ⑦ v10.29【决定性】runtime 里还有没有可用的 C API
             // 有 → 可以自己写 adapter 顶替那个被裁掉的空壳；没有 → NPU 彻底封死
             sb.appendLine("--- runtime 导出符号 ---")
-            val rtFile = logFile("libneuron_runtime.7.so")
+            val rtFile = java.io.File(
+                getApplication<android.app.Application>().filesDir, "libneuron_runtime.7.so")
             if (!rtFile.exists() || rtFile.length() == 0L) {
                 sb.appendLine("运行时副本不存在（上一步复制失败），无法解析")
             } else {
@@ -696,7 +642,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             // 摘要放最后 —— 诊断报告只抓 run_log 末尾，这样才不会被截掉
             sb.appendLine("--- 探针摘要 ---")
-            val libDir2 = appRef.applicationInfo.nativeLibraryDir
+            val libDir2 = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
             val disp = try {
                 java.io.File(libDir2).listFiles()?.firstOrNull { it.name.contains("Dispatch") }
             } catch (_: Throwable) { null }
@@ -713,7 +659,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (ownAdapter != null) "自造 adapter：已在 APK 内（${ownAdapter.length()} 字节）"
                 else "自造 adapter：❌ 不在 APK 内"
             )
-            val adaLog = logFile("npu_bridge.log")
+            val adaLog = java.io.File(
+                getApplication<android.app.Application>().filesDir, "npu_bridge.log")
             if (adaLog.exists()) {
                 sb.appendLine("adapter 调用日志：${adaLog.length()} 字节，最后 20 行：")
                 try {
@@ -725,7 +672,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
 
             try {
-                val lf = logFile("run_log.txt")
+                val lf = java.io.File(
+                    getApplication<android.app.Application>().filesDir, "run_log.txt")
                 lf.appendText("\n" + sb.toString())
             } catch (_: Throwable) {}
 
@@ -741,8 +689,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun probeNpuRun() {
         viewModelScope.launch(Dispatchers.IO) {
-            val app = appRef
-            val lf = logFile("run_log.txt")
+            val app = getApplication<android.app.Application>()
+            val lf = java.io.File(app.filesDir, "run_log.txt")
             val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
 
             // v10.32：每一步立刻落盘 —— 之前是攒到最后一次性写，
@@ -794,7 +742,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             step("--- 扫描结束 ---")
 
-            val adaLog = logFile("npu_bridge.log")
+            val adaLog = java.io.File(app.filesDir, "npu_bridge.log")
             try { if (adaLog.exists()) adaLog.delete() } catch (_: Throwable) {}
 
             val models = java.io.File(app.filesDir, "models").listFiles()
@@ -876,8 +824,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         benchRunning = true
         viewModelScope.launch(Dispatchers.IO) {
-            val app = appRef
-            val lf = logFile("run_log.txt")
+            val app = getApplication<android.app.Application>()
+            val lf = java.io.File(app.filesDir, "run_log.txt")
             val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
             fun step(msg: String) {
                 try { lf.appendText("[测速 ${fmt.format(java.util.Date())}] $msg\n") } catch (_: Throwable) {}
@@ -972,7 +920,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             step("⚠ ${m.length() / 1048576}MB 大模型，首次加载要做设备端编译，可能要 1~3 分钟，别切后台")
         }
         step("正在以 NPU 后端加载…")
-        val lf0 = logFile("run_log.txt")
+        val lf0 = java.io.File(app.filesDir, "run_log.txt")
         // v10.66：加载大模型时开个看门狗，每 2 秒记一次内存。
         // 如果进程是被内存挤死的，日志里能看到最后冲到多少。
         val watchdog = Thread {
@@ -1035,12 +983,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadModelFile(f: java.io.File) {
         if (!f.exists()) { status.value = "文件不见了：${f.name}"; refreshModels(); return }
-        // v10.76：草稿模型不允许当主模型加载 —— 0.6B 单独跑出来的回答没有意义
-        if (f.absolutePath == settings.value.draftPath) {
-            status.value = "「${f.name}」是投机解码的草稿模型，不能作为主模型加载。\n" +
-                    "先在下方「草稿模型」分组里取消它，或改选一个体积大的主模型。"
-            return
-        }
         modelPath.value = f.absolutePath
         status.value = "正在加载 ${f.name}…"
         loadModel()
@@ -1050,7 +992,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val wasCurrent = modelPath.value == f.absolutePath
         val ok = ModelLoader.deleteModel(f)
         if (ok && wasCurrent) {
-            modelPath.value = ModelLoader.currentModelPath(getApplication(), settings.value.draftPath)
+            modelPath.value = ModelLoader.currentModelPath(getApplication())
             try { Llama.unload() } catch (_: Throwable) {}
             try { LiteRtEngine.unload() } catch (_: Throwable) {}
             modelLoaded.value = false
@@ -1065,21 +1007,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 refreshModels()
                 if (p != null) {
-                    // v10.76：导入的如果明显比当前主模型小（多半是 0.6B 草稿），
-                    // 不要自动当主模型加载，提示用户去「草稿模型」分组里确认
-                    val nf = java.io.File(p)
-                    val cur = modelPath.value?.let { java.io.File(it) }
-                    val looksLikeDraft = cur != null && cur.exists() && cur.length() > 0 &&
-                            nf.length() * 100 / cur.length() < 60
-                    if (looksLikeDraft) {
-                        status.value = "已导入「${nf.name}」（${ModelLoader.sizeText(nf.length())}）。\n" +
-                                "它比当前主模型小很多，看起来是草稿模型 —— " +
-                                "请在下方「投机解码」里点「设为草稿」，不要直接当主模型用。"
-                    } else {
-                        modelPath.value = p
-                        status.value = "模型已导入，正在加载…"
-                        loadModel()
-                    }
+                    modelPath.value = p
+                    status.value = "模型已导入，正在加载…"
+                    loadModel()
                 } else {
                     // v10.22：把真实原因说出来 —— 之前只说"导入失败"，
                     // 复制中断（2.33GB 只进去 0.15GB）也吃得下这个提示，白折腾一轮
@@ -1098,7 +1028,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (path.endsWith(".litertlm", ignoreCase = true)) {
             genStatus.value = GenStatus(phase = "加载中")
             viewModelScope.launch(Dispatchers.IO) {
-                val app = appRef
+                val app = getApplication<android.app.Application>()
                 val be = settings.value.litertBackend
                 withContext(Dispatchers.Main) { status.value = "正在加载 LiteRT 模型（后端 $be）…" }
                 conversationReady = false
@@ -1142,7 +1072,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // 用户测 1/4/8 完全一样，日志永远 6，全是因为这一行。
             val cores = settings.value.threads.coerceIn(1, 16)
             // 动态后端需要知道 .so 目录（ggml 会在这里找 libggml-cpu-android_armvX_*.so）
-            val nativeDir = appRef.applicationInfo.nativeLibraryDir
+            val nativeDir = getApplication<android.app.Application>().applicationInfo.nativeLibraryDir
             val ok = Llama.load(path, cores, settings.value.contextSize, nativeDir)
 
             // v10.72：主模型就绪后挂草稿模型（投机解码）。
@@ -1191,17 +1121,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             status.value = "正在生成，等这句说完再切换草稿模型"
             return
         }
-        // v10.76：主模型不能同时当草稿，否则两个列表都会空掉一个
-        if (f != null && f.absolutePath == modelPath.value) {
-            status.value = "「${f.name}」正在作为主模型使用，不能再当草稿。\n" +
-                    "投机解码要用更小的同家族模型（如 Qwen3-0.6B）"
-            return
-        }
         val p = f?.absolutePath ?: ""
         val fname = f?.name ?: "（无）"
         updateSettings(settings.value.copy(draftPath = p, useDraft = f != null))
-        // 草稿选择变了，主模型/草稿两个列表要重新分组
-        refreshModels()
         if (!Llama.isLoaded()) {
             status.value = if (f == null) "已清除草稿模型" else "已选草稿：$fname（加载主模型时自动挂上）"
             return
@@ -1229,11 +1151,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * v10.76：开一个新会话（不用退出 App）。
+     * v10.79：开一个新会话（不用退出 App 重进）。
      *
-     * 为什么只清列表就够：历史每轮都是从 chatMessages 重建的，
-     * 而 native 侧的前缀缓存每轮从 n_past=0 重新算最长公共前缀 ——
-     * 列表清空后 prompt 只剩 system 那段，旧 KV 自然失配并被覆盖，不需要重载模型。
+     * 只清列表就够：历史每轮都是从 chatMessages 重建的，清空后 prompt 只剩 system 前缀，
+     * native 侧按最长公共前缀复用 KV，旧内容自然失配被覆盖，不需要重载模型。
      */
     fun newSession() {
         val ph = genStatus.value.phase
@@ -1243,7 +1164,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         chatMessages.clear()
         agentMessages.clear()
-        conversationReady = false   // LiteRT 分支自己管历史，标记重建
+        conversationReady = false
         genStatus.value = GenStatus()
         status.value = "已开启新会话"
     }
@@ -1528,7 +1449,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     mainHandler.post { ai.content.value += cloud }
                 }
                 is RouteResult.Action -> {
-                    val app = appRef
+                    val app = getApplication<android.app.Application>()
                     val todo = if (allActions.isNotEmpty()) allActions else listOf(route)
                     val sb = StringBuilder()
                     for (act in todo) {
@@ -1555,7 +1476,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 else -> {
                     // 直接回答：这时候才把模型写的东西一次显示出来
-                    val app = appRef
+                    val app = getApplication<android.app.Application>()
                     val trimmed = finalText.trim()
                     // v10.6：模型有时只回一个应用名（实测问"能刷短视频的是哪个"→ 回「抖音」），
                     // 没带 [ACTION:openapp] 格式。长度很短且能在应用表里认出来，就当打开处理。
