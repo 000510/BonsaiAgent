@@ -17,6 +17,8 @@ import com.example.bonsaiagent.agent.Router
 import com.example.bonsaiagent.agent.RouteResult
 import com.example.bonsaiagent.api.LocalApiServer
 import com.example.bonsaiagent.data.AgentSettings
+import com.example.bonsaiagent.data.MemoryFact
+import com.example.bonsaiagent.data.MemoryStore
 import com.example.bonsaiagent.data.SettingsStore
 import com.example.bonsaiagent.llm.ElfDump
 import com.example.bonsaiagent.llm.GgufTypeFixer
@@ -89,6 +91,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     )
     val modelLoaded = mutableStateOf(Llama.isLoaded())
+
+    // v10.87：结构化记忆 —— 关于用户的长期事实，每轮只挑相关的几条塞进 prompt
+    val memories = mutableStateListOf<MemoryFact>()
+    val pendingFact = mutableStateOf<MemoryFact?>(null)
+    private var memoryBusy = false
     val status = mutableStateOf("欢迎使用 BonsaiAgent")
     // v6.0：界面状态条用的实时状态（替代原来刷屏的实时日志）
     val genStatus = mutableStateOf(GenStatus())
@@ -172,6 +179,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }, "logcat-dump").start()
+
+        // v10.87：载入长期记忆。包一层 runCatching —— 记忆文件坏了也不能影响启动
+        runCatching { loadMemories() }
     }
 
     /**
@@ -1247,6 +1257,102 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 只清列表就够：历史每轮都是从 chatMessages 重建的，清空后 prompt 只剩 system 前缀，
      * native 侧按最长公共前缀复用 KV，旧内容自然失配被覆盖，不需要重载模型。
      */
+    // ─────────────── v10.87：结构化记忆 ───────────────
+
+    private fun loadMemories() {
+        memories.clear()
+        memories.addAll(MemoryStore.load(getApplication()))
+    }
+
+    /** 用户点「加入」（或改完后保存）→ 落库 */
+    fun acceptPending(editedContent: String? = null) {
+        val p = pendingFact.value ?: return
+        pendingFact.value = null
+        val content = (editedContent ?: p.content).trim()
+        if (content.isEmpty()) return
+        if (MemoryStore.isDuplicate(memories, content)) {
+            status.value = "这条记忆已经存在了"
+            return
+        }
+        memories.add(p.copy(content = content))
+        MemoryStore.save(getApplication(), memories)
+        status.value = "已记住：$content"
+    }
+
+    /** 用户点「忽略」→ 进忽略表，相似内容以后不再打扰 */
+    fun ignorePending() {
+        val p = pendingFact.value ?: return
+        pendingFact.value = null
+        MemoryStore.addIgnored(getApplication(), p.content)
+        status.value = "已忽略，以后不再问"
+    }
+
+    fun dismissPending() {
+        pendingFact.value = null
+    }
+
+    fun deleteMemory(f: MemoryFact) {
+        memories.remove(f)
+        MemoryStore.save(getApplication(), memories)
+        status.value = "已删除这条记忆"
+    }
+
+    /**
+     * 从一轮问答里抽一条关于用户的长期信息。
+     *
+     * 只抽「身份/偏好/项目/设备/习惯」五类，一次最多一条，格式固定为 `类别|内容`。
+     * 用最简单的竖线分隔而不是 JSON —— 小模型输出 JSON 时经常少括号，解析必炸。
+     */
+    private fun maybeExtractMemory(userMsg: String, aiReply: String) {
+        if (memoryBusy || !Llama.isLoaded() || LiteRtEngine.isLoaded()) return
+        if (pendingFact.value != null) return
+        if (userMsg.length < 4) return
+        memoryBusy = true
+        Thread({
+            try {
+                val prompt = buildString {
+                    append("<|im_start|>system\n")
+                    append("从对话里提取关于用户本人的长期信息。只限5类：身份/偏好/项目/设备/习惯。")
+                    append("只输出一行，格式：类别|内容。没有就输出 NONE。不要解释，不要引号。\n")
+                    append("<|im_end|>\n<|im_start|>user\n")
+                    append("用户：").append(userMsg.take(150)).append("\n")
+                    append("助手：").append(aiReply.take(150)).append("\n")
+                    append("<|im_end|>\n<|im_start|>assistant\n")
+                }
+                val sb = StringBuilder()
+                Llama.generate("", prompt, 0.2f, 10, 0.9f, 1.1f, 32) { sb.append(it) }
+                val line = sb.toString().trim()
+                    .lineSequence()
+                    .firstOrNull { it.isNotBlank() }
+                    ?.trim() ?: return@Thread
+                if (line.equals("NONE", true) || !line.contains("|")) return@Thread
+                val parts = line.split("|", limit = 2)
+                if (parts.size != 2) return@Thread
+                val key = parts[0].trim().take(6)
+                val content = parts[1].trim().trim('"').take(60)
+                if (content.length < 3) return@Thread
+                if (MemoryStore.isIgnored(getApplication(), content)) return@Thread
+                if (MemoryStore.isDuplicate(memories, content)) return@Thread
+                mainHandler.post {
+                    // 生成过程中可能又弹了一条，保持一次只问一条
+                    if (pendingFact.value == null) {
+                        pendingFact.value = MemoryFact(
+                            id = java.util.UUID.randomUUID().toString(),
+                            key = key,
+                            content = content,
+                            source = userMsg.take(40),
+                            createdAt = System.currentTimeMillis()
+                        )
+                    }
+                }
+            } catch (_: Throwable) {
+                // 抽取失败完全静默，不影响对话
+            } finally {
+                memoryBusy = false
+            }
+        }, "mem-extract").start()
+    }
+
     fun newSession() {
         val ph = genStatus.value.phase
         if (ph == "生成中" || ph == "思考中") {
@@ -1392,7 +1498,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // 保证界面上显示的是全文（顺带修了原来"一个字都没写进去"的兜底）
             mainHandler.post { ai.content.value = extractAnswer(buf.toString()).first }
             val st = genStatus.value
-            mainHandler.post { genStatus.value = st.copy(phase = "完成") }
+            mainHandler.post {
+                genStatus.value = st.copy(phase = "完成")
+                // v10.87：这一轮答完了，后台抽一条关于用户的长期信息
+                maybeExtractMemory(msg, ai.content.value)
+            }
         }
     }
 

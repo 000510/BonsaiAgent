@@ -16,8 +16,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.bonsaiagent.ChatMessage
+import com.example.bonsaiagent.data.MemoryFact
 import com.example.bonsaiagent.MainViewModel
 
 @Composable
@@ -33,6 +36,15 @@ fun ChatScreen(vm: MainViewModel) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(vm.chatMessages, key = { it.id }) { msg -> Bubble(msg) }
+        }
+        // v10.87：检测到可记忆的信息时，从输入框上方滑出确认条
+        vm.pendingFact.value?.let { f ->
+            MemoryPromptCard(
+                fact = f,
+                onAccept = { vm.acceptPending(it) },
+                onIgnore = { vm.ignorePending() },
+                onClose = { vm.dismissPending() }
+            )
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -109,5 +121,87 @@ fun Bubble(msg: ChatMessage) {
                 color = if (isUser) cs.onPrimary else cs.onSurfaceVariant
             )
         }
+    }
+}
+
+/**
+ * v10.87：记忆确认卡。
+ *
+ * 为什么不直接写入：小模型自动抽取准确率只有七成左右，写错了会一直污染后续对话。
+ * 这里把决定权交给用户，并把「来源」显示出来 —— 判断对错的依据是原始那句话，不是模型的转述。
+ */
+@Composable
+private fun MemoryPromptCard(
+    fact: MemoryFact,
+    onAccept: (String) -> Unit,
+    onIgnore: () -> Unit,
+    onClose: () -> Unit
+) {
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember(fact.id) { mutableStateOf(fact.content) }
+    val cs = MaterialTheme.colorScheme
+
+    Surface(
+        color = cs.secondaryContainer,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+    ) {
+        Column(Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "✨ 检测到一条记忆",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = cs.onSecondaryContainer
+                )
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onClose) { Text("✕", fontSize = 13.sp) }
+            }
+            Text(
+                "【${fact.key}】${fact.content}",
+                fontSize = 13.sp,
+                color = cs.onSecondaryContainer,
+                modifier = Modifier.padding(end = 8.dp)
+            )
+            if (fact.source.isNotBlank()) {
+                Text(
+                    "来源：${fact.source}",
+                    fontSize = 10.sp,
+                    color = cs.onSecondaryContainer.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 2.dp, end = 8.dp)
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onAccept(fact.content) }) { Text("加入", fontSize = 13.sp) }
+                TextButton(onClick = { editing = true }) { Text("修改", fontSize = 13.sp) }
+                TextButton(onClick = onIgnore) { Text("忽略", fontSize = 13.sp) }
+            }
+        }
+    }
+
+    if (editing) {
+        AlertDialog(
+            onDismissRequest = { editing = false },
+            title = { Text("修改后保存") },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    label = { Text("记忆内容") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    editing = false
+                    onAccept(draft)
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editing = false }) { Text("取消") }
+            }
+        )
     }
 }

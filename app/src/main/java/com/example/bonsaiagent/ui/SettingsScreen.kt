@@ -176,6 +176,39 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         }
         Divider(Modifier.padding(vertical = 4.dp))
 
+        // v10.87：长期记忆管理
+        Divider(Modifier.padding(vertical = 4.dp))
+        Text("长期记忆（${vm.memories.size}）", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "从对话里检测到的关于你的信息。每条都能看到来源，随时可删。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (vm.memories.isEmpty()) {
+            Text("（还没有记忆）", style = MaterialTheme.typography.bodySmall)
+        }
+        vm.memories.forEach { f ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("【${f.key}】${f.content}", style = MaterialTheme.typography.bodySmall)
+                    if (f.source.isNotBlank()) {
+                        Text(
+                            "来源：${f.source}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                TextButton(onClick = { vm.deleteMemory(f) }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+        Divider(Modifier.padding(vertical = 4.dp))
+
         // v10.20：LiteRT 后端选择（只对 .litertlm 模型有效）
         Text("LiteRT 后端（仅 .litertlm 模型）", style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
