@@ -378,6 +378,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sb.appendLine("--- 日志末尾 ---")
             sb.appendLine(log)
         }
+        // v10.88：记忆抽取轨迹（判断卡片为什么不弹）
+        val memLogs = readFileTail("memory.log", 20)
+        if (memLogs.isNotBlank()) {
+            sb.appendLine("--- 记忆抽取 ---")
+            sb.appendLine(memLogs)
+        }
         // v10.35：run_log 只截末尾 40 行太短，NPU 扫描结果会被挤掉。
         // 从"全系统库目录扫描"那句开始，把后面整段原样带出来。
         try {
@@ -1303,10 +1309,74 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 只抽「身份/偏好/项目/设备/习惯」五类，一次最多一条，格式固定为 `类别|内容`。
      * 用最简单的竖线分隔而不是 JSON —— 小模型输出 JSON 时经常少括号，解析必炸。
      */
+    /** 长期偏好的关键词。命中就直接弹卡片，不依赖模型抽取 */
+    private val MEMORY_HINTS = listOf(
+        "以后", "下次", "记住", "别再", "不要叫", "叫我", "我喜欢", "我习惯",
+        "我的名字", "我在", "我是", "别那么", "别再问", "记得"
+    )
+
+    private fun guessKey(s: String): String = when {
+        s.contains("我叫") || s.contains("我的名字") || s.contains("我是") -> "身份"
+        s.contains("习惯") -> "习惯"
+        s.contains("手机") || s.contains("设备") || s.contains("电脑") -> "设备"
+        s.contains("项目") || s.contains("在做") || s.contains("开发") -> "项目"
+        else -> "偏好"
+    }
+
+    private fun memLog(s: String) {
+        try {
+            logFile("memory.log").appendText(
+                java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                    .format(java.util.Date()) + "  " + s + "\n"
+            )
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun pushPending(key: String, content: String, source: String): Boolean {
+        if (content.length < 4) return false
+        if (MemoryStore.isIgnored(getApplication(), content)) {
+            memLog("跳过（已忽略）：$content"); return false
+        }
+        if (MemoryStore.isDuplicate(memories, content)) {
+            memLog("跳过（已存在）：$content"); return false
+        }
+        pendingFact.value = MemoryFact(
+            id = java.util.UUID.randomUUID().toString(),
+            key = key,
+            content = content,
+            source = source.take(40),
+            createdAt = System.currentTimeMillis()
+        )
+        memLog("弹出确认：[$key] $content")
+        return true
+    }
+
+    /**
+     * v10.88：改为「规则优先，模型兜底」。
+     *
+     * 上一版完全依赖小模型抽取，实测一句「你以后说话简洁一点」什么都没弹出来 ——
+     * 小模型在这种短句上输出不稳定（有时回 NONE、有时格式不对）。
+     * 现在先用关键词判断「这句话像不像长期偏好」，命中就直接把用户原话拿去确认，
+     * 模型只作为补充，抽不到也不影响主流程。
+     */
     private fun maybeExtractMemory(userMsg: String, aiReply: String) {
-        if (memoryBusy || !Llama.isLoaded() || LiteRtEngine.isLoaded()) return
         if (pendingFact.value != null) return
-        if (userMsg.length < 4) return
+        val m = userMsg.trim()
+        if (m.length < 4) return
+
+        // ① 快速通道：命中关键词，直接用用户原话
+        val hit = MEMORY_HINTS.firstOrNull { m.contains(it) }
+        if (hit != null) {
+            val content = m.trim('，', '。', '！', '？', '、', ' ', '\n', '~', '～').take(50)
+            if (pushPending(guessKey(m), content, m)) return
+        }
+
+        // ② 兜底：让模型再判断一次（失败完全静默）
+        if (memoryBusy || !Llama.isLoaded() || LiteRtEngine.isLoaded()) {
+            memLog("跳过模型抽取：busy=$memoryBusy loaded=${Llama.isLoaded()}")
+            return
+        }
         memoryBusy = true
         Thread({
             try {
@@ -1331,18 +1401,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val key = parts[0].trim().take(6)
                 val content = parts[1].trim().trim('"').take(60)
                 if (content.length < 3) return@Thread
-                if (MemoryStore.isIgnored(getApplication(), content)) return@Thread
-                if (MemoryStore.isDuplicate(memories, content)) return@Thread
                 mainHandler.post {
                     // 生成过程中可能又弹了一条，保持一次只问一条
                     if (pendingFact.value == null) {
-                        pendingFact.value = MemoryFact(
-                            id = java.util.UUID.randomUUID().toString(),
-                            key = key,
-                            content = content,
-                            source = userMsg.take(40),
-                            createdAt = System.currentTimeMillis()
-                        )
+                        pushPending(key, content, userMsg)
                     }
                 }
             } catch (_: Throwable) {
