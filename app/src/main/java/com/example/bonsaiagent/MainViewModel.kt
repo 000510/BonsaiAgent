@@ -1484,7 +1484,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ).format(java.util.Date())
 
         // system 必须逐字节固定，KV 前缀才复用得上
-        val sysFixed = "你是手机本地助手，回答简洁准确。"
+        // v10.91：LFM2.5 这类强制思考模型，试着用 system 指令压住思维链。
+        // 中英双语写，因为它的思考是英文的。对普通模型保持原样不影响。
+        val sysFixed = if (isNonThinkModel())
+            "你是手机本地助手，回答简洁准确。直接给出最终答案，不要输出任何思考过程或推理内容（do NOT output <think> or reasoning, answer directly and briefly）。"
+            else "你是手机本地助手，回答简洁准确。"
         val sysPrefix = "<|im_start|>system\n" + sysFixed + "<|im_end|>\n"
 
         val isContinue = Regex("续写|接着写|继续写|往下写|补充").containsMatchIn(msg)
