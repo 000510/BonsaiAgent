@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -34,12 +35,20 @@ fun ChatScreen(vm: MainViewModel) {
 
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        LazyColumn(
-            Modifier.weight(1f).fillMaxWidth(),
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(vm.chatMessages, key = { it.id }) { msg -> Bubble(msg) }
+        if (vm.chatMessages.isEmpty()) {
+            // v10.96：空状态引导 —— 别让用户对着一片空白发呆
+            EmptyWelcome(
+                Modifier.weight(1f).fillMaxWidth(),
+                onPrompt = { vm.sendChat(it) }
+            )
+        } else {
+            LazyColumn(
+                Modifier.weight(1f).fillMaxWidth(),
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(vm.chatMessages, key = { it.id }) { msg -> Bubble(msg) }
+            }
         }
         // v10.87：检测到可记忆的信息时，从输入框上方滑出确认条
         vm.pendingFact.value?.let { f ->
@@ -66,7 +75,15 @@ fun ChatScreen(vm: MainViewModel) {
                     onValueChange = { input = it },
                     placeholder = { Text("和本地模型聊聊…") },
                     modifier = Modifier.weight(1f),
-                    maxLines = 5
+                    maxLines = 5,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent
+                    )
                 )
                 val canSend = input.isNotBlank()
                 IconButton(
@@ -107,6 +124,67 @@ fun ChatScreen(vm: MainViewModel) {
     ) {
         GenStatusBar(vm)
     }
+    }
+}
+
+/**
+ * v10.96：空状态欢迎页。
+ * 参考 DeepSeek：中间一个品牌图形 + 一句问候 + 几个可点的快捷提问，
+ * 让首次打开不再是一片空白。点快捷项直接发出去。
+ */
+@Composable
+fun EmptyWelcome(modifier: Modifier = Modifier, onPrompt: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val suggestions = listOf(
+        "用一句话介绍你自己",
+        "帮我写一段周末计划",
+        "解释一下什么是大语言模型"
+    )
+    Column(
+        modifier,
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 品牌图形：盆栽意象（绿色圆底 + 叶子 emoji，纯 Compose 无需图片资源）
+        Surface(
+            shape = CircleShape,
+            color = cs.primaryContainer,
+            modifier = Modifier.size(72.dp)
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("🌱", fontSize = 36.sp)
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "你好，我是 Bonsai",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = cs.onSurface
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "一个完全跑在你手机上的本地助手",
+            style = MaterialTheme.typography.bodyMedium,
+            color = cs.onSurfaceVariant
+        )
+        Spacer(Modifier.height(28.dp))
+        suggestions.forEach { q ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(cs.surfaceVariant)
+                    .clickable { onPrompt(q) }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(q, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
+                Spacer(Modifier.weight(1f))
+                Text("↗", fontSize = 16.sp, color = cs.primary)
+            }
+        }
     }
 }
 

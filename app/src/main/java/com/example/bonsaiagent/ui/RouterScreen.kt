@@ -63,7 +63,15 @@ fun RouterScreen(vm: MainViewModel) {
                     onValueChange = { input = it },
                     placeholder = { Text("交给 Agent 处理…") },
                     modifier = Modifier.weight(1f),
-                    maxLines = 5
+                    maxLines = 5,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent
+                    )
                 )
                 val canSend = input.isNotBlank()
                 IconButton(

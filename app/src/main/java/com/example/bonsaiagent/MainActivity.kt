@@ -6,6 +6,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -104,26 +108,17 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
-    val titles = listOf("对话", "路由 / Agent", "设置")
+    val titles = listOf("对话", "智能体", "设置")
+    val navIcons = listOf(Icons.Filled.Chat, Icons.Filled.SmartToy, Icons.Filled.Settings)
     val ctx = LocalContext.current
-    val ver = remember {
-        runCatching {
-            ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
-        }.getOrNull() ?: ""
-    }
     LaunchedEffect(Unit) { CrashCatcher.mark(ctx, "6 首帧已渲染") }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text("BonsaiAgent")
-                        if (ver.isNotEmpty()) {
-                            Text("v$ver", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                },
+                        Text("BonsaiAgent", fontWeight = FontWeight.SemiBold)
+                    },
                 actions = {
                     // 新会话：只清对话列表，不用退出 App
                     if (tab != 2) {
@@ -139,7 +134,7 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                         selected = tab == i,
                         onClick = { tab = i },
                         label = { Text(t) },
-                        icon = { }
+                        icon = { Icon(navIcons[i], contentDescription = t) }
                     )
                 }
             }
