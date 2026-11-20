@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -20,12 +21,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bonsaiagent.MainViewModel
 import com.example.bonsaiagent.llm.ModelLoader
 import com.example.bonsaiagent.data.AgentSettings
 
+/**
+ * v10.94：设置页重整。
+ * - 调试类按钮（NPU/OpenCL 探测、测速）收进「高级 / 调试」折叠组
+ * - 长期记忆折叠，默认收起
+ * - 投机解码（草稿模型）折叠且标注"实验性"，不外显在主界面
+ * - 配色支持自定义（主色/强调色十六进制输入）
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
@@ -37,7 +47,9 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         Modifier.fillMaxSize().padding(16.dp).verticalScroll(scroll),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // v10.83：界面配色，点一下即时生效并落盘
+        SectionTitle("外观")
+
+        // ---------- 配色：预设 + 自定义 ----------
         Text("界面配色", style = MaterialTheme.typography.titleSmall)
         Text(
             "点色块即时切换，选择会保存。深色模式自动适配。",
@@ -71,43 +83,73 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                 }
             }
         }
+
+        // 自定义配色：两个颜色输入框 + 预备一个 Custom 色块
+        var seedText by remember { mutableStateOf("#%08X".format(s.customSeed.toInt())) }
+        var accentText by remember { mutableStateOf("#%08X".format(s.customAccent.toInt())) }
+        var colorErr by remember { mutableStateOf("") }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = seedText,
+                onValueChange = { seedText = it },
+                label = { Text("主色") },
+                modifier = Modifier.weight(1f),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = accentText,
+                onValueChange = { accentText = it },
+                label = { Text("强调色") },
+                modifier = Modifier.weight(1f),
+                singleLine = true
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = {
+                val a = parseColorLong(seedText)
+                val b = parseColorLong(accentText)
+                if (a == null || b == null) {
+                    colorErr = "颜色格式应为 #AARRGGBB 或 #RRGGBB"
+                } else {
+                    colorErr = ""
+                    vm.updateSettings(
+                        s.copy(themePreset = "Custom", customSeed = a, customAccent = b)
+                    )
+                    Toast.makeText(ctx, "自定义配色已应用", Toast.LENGTH_SHORT).show()
+                }
+            }) { Text("应用自定义") }
+            if (s.themePreset == "Custom") {
+                Text("● 当前：自定义", color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        if (colorErr.isNotBlank()) {
+            Text(colorErr, color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelSmall)
+        }
+        Text(
+            "格式示例：#FF2E7D58（松针绿）、#FF2C6E9B（深海蓝）。前两位 FF 是不透明度，可省略。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Divider(Modifier.padding(vertical = 4.dp))
 
-        Text("模型", style = MaterialTheme.typography.titleMedium)
+        // ---------- 模型 ----------
+        SectionTitle("模型")
         Text(vm.modelPath.value ?: "未导入模型", style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onPickModel) { Text("导入本地模型 (.gguf)") }
             OutlinedButton(onClick = vm::loadModel) { Text("加载模型") }
         }
-        // v10.0：手机里装了哪些应用由系统清单决定，装了新 App 点这里刷新
-        OutlinedButton(onClick = { vm.refreshApps() }) {
-            Text("刷新应用列表（已识别 ${vm.appCount.value} 个）")
-        }
-        // v10.23：探测系统里有没有联发科 NPU 运行时库
-        OutlinedButton(onClick = { vm.probeNpu() }) {
-            Text("探测 NPU 库（查 /vendor/lib64）")
-        }
-        // v10.26：深度探测 —— 查白名单 + 能不能真的读出来
-        OutlinedButton(onClick = { vm.probeNpuDeep() }) {
-            Text("NPU 终极探测（扫 system_ext）")
-        }
-        // v10.70：GPU 后端要 dlopen libOpenCL.so，找不到就报 Status Code 2。
-        // 这里扫厂商分区并逐个真 dlopen，分清「没有库」还是「有库但搜不到」
-        OutlinedButton(onClick = { vm.probeOpenCL() }) {
-            Text("🔍 探测 OpenCL（GPU 后端依赖）")
-        }
-        // v10.31：一键自检 —— 自动用 NPU 后端加载 .litertlm 并生成一句话，
-        // 把 LiteRT 真的推到 dispatch → adapter 这条线上
-        OutlinedButton(onClick = { vm.probeNpuRun() }) {
-            Text("⚡ 一键 NPU 自检（自动跑一次推理）")
-        }
-        // v10.60：NPU 通了之后的正式测速
-        OutlinedButton(onClick = { vm.probeNpuBench() }) {
-            Text("🏁 NPU 测速（prefill / decode）")
-        }
 
-        // v10.22：模型管理 —— 私有目录里的模型会一直堆着不删，
-        // 实测堆到 11.83 GB（三值模型好几份 + 各家 gguf），把手机撑爆。
         Divider(Modifier.padding(vertical = 4.dp))
         Text("主模型（${vm.mainModelFiles.size}）", style = MaterialTheme.typography.titleSmall)
         vm.mainModelFiles.forEach { f ->
@@ -123,10 +165,8 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                // v10.25：直接在这里加载/删除，不用再跑文件夹里挑
-                // v10.85：正在用的那个显示「已加载」并置灰，避免重复点
                 val isCurrent = vm.modelPath.value == f.absolutePath && vm.modelLoaded.value
-                TextButton(
+                Button(
                     onClick = { vm.loadModelFile(f) },
                     enabled = !isCurrent
                 ) {
@@ -141,149 +181,6 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
             Text("（还没有导入主模型）", style = MaterialTheme.typography.bodySmall)
         }
 
-        // v10.81：草稿模型单独成组 —— 它们只服务于投机解码，不能当主模型对话
-        if (vm.draftModelFiles.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "草稿模型 · 投机加速用（${vm.draftModelFiles.size}）",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.secondary
-            )
-            Text(
-                "这些是体积小的草稿模型，只给主模型「猜下一句」用，不能直接对话。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            vm.draftModelFiles.forEach { f ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(f.name, style = MaterialTheme.typography.bodySmall)
-                        Text(
-                            "${ModelLoader.sizeText(f.length())} · 正在作为草稿",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                    }
-                    TextButton(onClick = { vm.setDraftModel(null) }) { Text("取消草稿") }
-                    TextButton(onClick = { vm.deleteModelFile(f) }) {
-                        Text("删除", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        }
-        Divider(Modifier.padding(vertical = 4.dp))
-
-        // v10.87：长期记忆管理
-        Divider(Modifier.padding(vertical = 4.dp))
-        Text("长期记忆（${vm.memories.size}）", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "从对话里检测到的关于你的信息。每条都能看到来源，随时可删。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        if (vm.memories.isEmpty()) {
-            Text("（还没有记忆）", style = MaterialTheme.typography.bodySmall)
-        }
-        vm.memories.forEach { f ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("【${f.key}】${f.content}", style = MaterialTheme.typography.bodySmall)
-                    if (f.source.isNotBlank()) {
-                        Text(
-                            "来源：${f.source}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-                TextButton(onClick = { vm.deleteMemory(f) }) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
-                }
-            }
-        }
-        Divider(Modifier.padding(vertical = 4.dp))
-
-        // v10.20：LiteRT 后端选择（只对 .litertlm 模型有效）
-        Text("LiteRT 后端（仅 .litertlm 模型）", style = MaterialTheme.typography.bodySmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("NPU", "GPU", "CPU").forEach { be ->
-                val on = s.litertBackend.equals(be, true)
-                if (on) {
-                    Button(onClick = {}) { Text(be) }
-                } else {
-                    OutlinedButton(onClick = { vm.updateSettings(s.copy(litertBackend = be)) }) { Text(be) }
-                }
-            }
-        }
-        // v10.72：投机解码（草稿模型加速）。手机推理卡在带宽，这一项是目前唯一
-        // 不牺牲模型质量、又能把速度往上抬的开关。
-        Divider(Modifier.padding(vertical = 4.dp))
-        Text("🚀 投机解码（加速）", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "主模型一次前向验证 γ 个候选，把「读一遍权重」的带宽摊薄，猜对的直接采纳。\n" +
-                "硬规矩：草稿模型必须和主模型同家族同词表 —— Qwen3-4B 配 Qwen3-0.6B，" +
-                "体积小 5 倍以上，精度用 Q8_0。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        val draftName = s.draftPath.takeIf { it.isNotBlank() }
-            ?.let { runCatching { java.io.File(it).name }.getOrNull() } ?: "未选择"
-        Text("当前草稿：$draftName", style = MaterialTheme.typography.bodySmall)
-        if (s.draftPath.isNotBlank()) {
-            OutlinedButton(onClick = { vm.setDraftModel(null) }) { Text("关闭加速") }
-        }
-        Text("γ（每轮猜几个，改完自动重挂）：${s.draftMax}", style = MaterialTheme.typography.bodySmall)
-        Text(
-            "手机上 2~3 最划算。每多猜一个，主模型就要多算一次 15 万词表的输出层 —— " +
-                "实测 γ=8 时这一项就吃掉 35% 的时间。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(2, 3, 4, 6).forEach { g ->
-                if (s.draftMax == g) {
-                    Button(onClick = {}) { Text("$g") }
-                } else {
-                    OutlinedButton(onClick = {
-                        vm.updateSettings(s.copy(draftMax = g))
-                        if (s.draftPath.isNotBlank()) {
-                            vm.setDraftModel(runCatching { java.io.File(s.draftPath) }.getOrNull())
-                        }
-                    }) { Text("$g") }
-                }
-            }
-        }
-        Text("从主模型里挑一个当草稿（建议选体积最小的同家族模型）：", style = MaterialTheme.typography.bodySmall)
-        val draftCandidates = vm.mainModelFiles.filter {
-            it.name.endsWith(".gguf", true) && it.absolutePath != vm.modelPath.value
-        }.sortedBy { it.length() }
-        if (draftCandidates.isEmpty()) {
-            Text("（没有其它 gguf —— 先导入一个 Qwen3-0.6B）",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        draftCandidates.forEach { f ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 1.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(f.name, style = MaterialTheme.typography.bodySmall)
-                    Text(ModelLoader.sizeText(f.length()),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                TextButton(onClick = { vm.setDraftModel(f) }) { Text("设为草稿") }
-            }
-        }
-
-        // 长按可复制：诊断日志太长，复制粘贴比截图清楚得多
         SelectionContainer {
             Text(
                 vm.status.value,
@@ -292,9 +189,6 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                 else MaterialTheme.colorScheme.error
             )
         }
-
-        // v6.3：一键带走诊断信息。日志几百行，长按拖选太痛苦，
-        // 这里直接复制或弹系统分享面板（发给微信/QQ 即可）。
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
                 val txt = vm.buildDiagnostics()
@@ -302,7 +196,6 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                 cm.setPrimaryClip(ClipData.newPlainText("bonsai-diag", txt))
                 Toast.makeText(ctx, "诊断已复制（${txt.length} 字）", Toast.LENGTH_SHORT).show()
             }) { Text("复制诊断") }
-
             OutlinedButton(onClick = {
                 val txt = vm.buildDiagnostics()
                 val i = Intent(Intent.ACTION_SEND).apply {
@@ -314,9 +207,9 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
             }) { Text("分享诊断") }
         }
 
+        // ---------- 推理参数 ----------
         Divider(Modifier.padding(vertical = 8.dp))
-        Text("推理参数", style = MaterialTheme.typography.titleMedium)
-
+        SectionTitle("推理参数")
         SliderRow("最大输出长度: ${s.maxTokens}", s.maxTokens.toFloat(), 256f, 4096f, 64f) {
             vm.updateSettings(s.copy(maxTokens = it.toInt()))
         }
@@ -339,8 +232,9 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
             vm.updateSettings(s.copy(threads = it.toInt()))
         }
 
+        // ---------- 系统提示词 ----------
         Divider(Modifier.padding(vertical = 8.dp))
-        Text("系统提示词", style = MaterialTheme.typography.titleMedium)
+        SectionTitle("系统提示词")
         OutlinedTextField(
             value = s.systemPrompt,
             onValueChange = { vm.updateSettings(s.copy(systemPrompt = it)) },
@@ -348,64 +242,182 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
             maxLines = 8
         )
 
+        // ---------- 折叠组：长期记忆 ----------
         Divider(Modifier.padding(vertical = 8.dp))
-        Text("下载源（用于参考/记录）", style = MaterialTheme.typography.titleMedium)
-        SourceDropdown(
-            current = s.downloadSource,
-            onSelect = { vm.updateSettings(s.copy(downloadSource = it)) }
-        )
-
-        Divider(Modifier.padding(vertical = 8.dp))
-        Text("Agent 安全", style = MaterialTheme.typography.titleMedium)
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        FoldSection("长期记忆（${vm.memories.size}）") {
             Text(
-                "允许执行危险命令",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f)
+                "只有明确说了「记住 XX」「以后…」才会记录。每条都能看到来源，随时可删。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Switch(
-                checked = s.allowDangerous,
-                onCheckedChange = { vm.updateSettings(s.copy(allowDangerous = it)) }
+            if (vm.memories.isEmpty()) {
+                Text("（还没有记忆）", style = MaterialTheme.typography.bodySmall)
+            }
+            vm.memories.forEach { f ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("【${f.key}】${f.content}", style = MaterialTheme.typography.bodySmall)
+                        if (f.source.isNotBlank()) {
+                            Text(
+                                "来源：${f.source}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    TextButton(onClick = { vm.deleteMemory(f) }) {
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+
+        // ---------- 折叠组：实验性功能（投机解码 + 草稿模型 + LiteRT） ----------
+        Divider(Modifier.padding(vertical = 8.dp))
+        FoldSection("实验性功能") {
+            Text(
+                "投机解码目前仅对重复/改写类内容有效，通用对话反而变慢，默认不建议使用。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text("LiteRT 后端（仅 .litertlm 模型）", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("NPU", "GPU", "CPU").forEach { be ->
+                    val on = s.litertBackend.equals(be, true)
+                    if (on) Button(onClick = {}) { Text(be) }
+                    else OutlinedButton(onClick = { vm.updateSettings(s.copy(litertBackend = be)) }) { Text(be) }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            val draftName = s.draftPath.takeIf { it.isNotBlank() }
+                ?.let { runCatching { java.io.File(it).name }.getOrNull() } ?: "未选择"
+            Text("草稿模型（旧版投机用）：$draftName", style = MaterialTheme.typography.bodySmall)
+            if (s.draftPath.isNotBlank()) {
+                OutlinedButton(onClick = { vm.setDraftModel(null) }) { Text("取消草稿") }
+            }
+            vm.draftModelFiles.forEach { f ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(f.name, style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f))
+                    TextButton(onClick = { vm.deleteModelFile(f) }) {
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+
+        // ---------- 折叠组：高级 / 调试 ----------
+        Divider(Modifier.padding(vertical = 8.dp))
+        FoldSection("高级 / 调试") {
+            OutlinedButton(onClick = { vm.refreshApps() }) {
+                Text("刷新应用列表（已识别 ${vm.appCount.value} 个）")
+            }
+            OutlinedButton(onClick = { vm.probeNpu() }) { Text("探测 NPU 库") }
+            OutlinedButton(onClick = { vm.probeNpuDeep() }) { Text("NPU 深度探测") }
+            OutlinedButton(onClick = { vm.probeOpenCL() }) { Text("探测 OpenCL") }
+            OutlinedButton(onClick = { vm.probeNpuRun() }) { Text("NPU 自检（跑一次推理）") }
+            OutlinedButton(onClick = { vm.probeNpuBench() }) { Text("NPU 测速") }
+            Spacer(Modifier.height(6.dp))
+            Text("下载源（用于参考/记录）", style = MaterialTheme.typography.bodySmall)
+            SourceDropdown(
+                current = s.downloadSource,
+                onSelect = { vm.updateSettings(s.copy(downloadSource = it)) }
             )
         }
-        Text(
-            "默认关闭。本地模型可能被「帮我清理一下存储」这类话诱导出 " +
-                    "rm -rf、pm uninstall、su、curl|sh 等命令。" +
-                    "关闭时这些操作会被安全墙拦下并告知你；只有你明确打开后才放行。" +
-                    "建议保持关闭。",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (s.allowDangerous) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.outline
-        )
 
+        // ---------- 折叠组：Agent 安全 & 云端 ----------
         Divider(Modifier.padding(vertical = 8.dp))
-        Text("云端 API（DeepSeek）", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = s.deepseekKey,
-            onValueChange = { vm.updateSettings(s.copy(deepseekKey = it)) },
-            label = { Text("API Key") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-        OutlinedTextField(
-            value = s.apiBase,
-            onValueChange = { vm.updateSettings(s.copy(apiBase = it)) },
-            label = { Text("接口地址") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Divider(Modifier.padding(vertical = 8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("开启本机 HTTP API（类似 Ollama）", style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f))
-            Switch(checked = s.apiEnabled, onCheckedChange = {
-                vm.updateSettings(s.copy(apiEnabled = it))
-            })
+        FoldSection("Agent 安全 & 云端") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("允许执行危险命令", style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f))
+                Switch(checked = s.allowDangerous,
+                    onCheckedChange = { vm.updateSettings(s.copy(allowDangerous = it)) })
+            }
+            Text(
+                "默认关闭。本地模型可能被诱导出 rm -rf、pm uninstall 等命令。建议保持关闭。",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (s.allowDangerous) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.outline
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = s.deepseekKey,
+                onValueChange = { vm.updateSettings(s.copy(deepseekKey = it)) },
+                label = { Text("DeepSeek API Key") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = s.apiBase,
+                onValueChange = { vm.updateSettings(s.copy(apiBase = it)) },
+                label = { Text("接口地址") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("开启本机 HTTP API", style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f))
+                Switch(checked = s.apiEnabled,
+                    onCheckedChange = { vm.updateSettings(s.copy(apiEnabled = it)) })
+            }
+            Text("监听 127.0.0.1:11434，提供 POST /api/generate。",
+                style = MaterialTheme.typography.bodySmall)
         }
-        Text("开启后监听 127.0.0.1:11434，提供 POST /api/generate，仅本进程内可访问。",
-            style = MaterialTheme.typography.bodySmall)
+
+        Spacer(Modifier.height(24.dp))
     }
+}
+
+/** 分组标题 */
+@Composable
+private fun SectionTitle(text: String) {
+    Text(text, style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 4.dp))
+}
+
+/** 可折叠分组，默认收起 */
+@Composable
+private fun FoldSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().clickable { expanded = !expanded }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.weight(1f))
+            Text(if (expanded) "▲" else "▼", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (expanded) {
+            Column(
+                Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                content = content
+            )
+        }
+    }
+}
+
+/** 解析 #AARRGGBB / #RRGGBB，失败返回 null */
+private fun parseColorLong(s: String): Long? {
+    val t = s.trim().removePrefix("#")
+    return try {
+        when (t.length) {
+            6 -> 0xFF000000L or t.toLong(16)
+            8 -> t.toLong(16)
+            else -> null
+        }
+    } catch (_: Exception) { null }
 }
 
 @Composable
