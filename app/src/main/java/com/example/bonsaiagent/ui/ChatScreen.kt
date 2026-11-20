@@ -7,12 +7,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -46,22 +49,52 @@ fun ChatScreen(vm: MainViewModel) {
                 onClose = { vm.dismissPending() }
             )
         }
-        Row(
-            Modifier.fillMaxWidth().padding(top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+        // v10.94：输入框仿 DeepSeek —— 圆角卡片、无边框、发送按钮内嵌
+        Surface(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 0.dp
         ) {
-            TextField(
-                value = input,
-                onValueChange = { input = it },
-                placeholder = { Text("和本地模型聊聊…") },
-                modifier = Modifier.weight(1f),
-                maxLines = 4
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = {
-                vm.sendChat(input)
-                input = ""
-            }) { Text("发送") }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                TextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    placeholder = { Text("和本地模型聊聊…") },
+                    modifier = Modifier.weight(1f),
+                    maxLines = 5
+                )
+                val canSend = input.isNotBlank()
+                IconButton(
+                    onClick = {
+                        if (canSend) {
+                            vm.sendChat(input)
+                            input = ""
+                        }
+                    },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .padding(bottom = 2.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (canSend) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outlineVariant
+                        ),
+                    enabled = canSend
+                ) {
+                    Text(
+                        "↑",
+                        color = if (canSend) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 22.sp, fontWeight = FontWeight.Medium
+                        )
+                    )
+                }
+            }
         }
     }
 
