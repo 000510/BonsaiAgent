@@ -37,6 +37,10 @@ val THEME_PRESETS = listOf(
 fun presetByKey(key: String): ThemePreset =
     THEME_PRESETS.firstOrNull { it.key == key } ?: THEME_PRESETS[0]
 
+// v10.94：自定义配色（设置页里用滑块选的主色/强调色）
+fun customPreset(seed: Long, accent: Long): ThemePreset =
+    ThemePreset("Custom", "自定义", seed, accent)
+
 private fun buildScheme(seed: Color, accent: Color, dark: Boolean) =
     if (dark) darkColorScheme(
         primary = lerp(seed, Color.White, 0.42f),
@@ -81,11 +85,14 @@ private fun buildScheme(seed: Color, accent: Color, dark: Boolean) =
 @Composable
 fun BonsaiTheme(
     presetKey: String = "Moss",
+    customSeed: Long = 0xFF2E7D58,
+    customAccent: Long = 0xFFB87B32,
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    val p = presetByKey(presetKey)
-    val scheme = remember(p.key, darkTheme) {
+    val p = if (presetKey == "Custom") customPreset(customSeed, customAccent)
+            else presetByKey(presetKey)
+    val scheme = remember(p.key, p.seed, p.accent, darkTheme) {
         buildScheme(Color(p.seed), Color(p.accent), darkTheme)
     }
     MaterialTheme(
