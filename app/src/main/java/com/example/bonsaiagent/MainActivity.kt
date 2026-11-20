@@ -85,7 +85,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             // 配色跟着设置走，改完立即生效
-            BonsaiTheme(presetKey = vm.settings.value.themePreset) {
+            BonsaiTheme(
+                presetKey = vm.settings.value.themePreset,
+                customSeed = vm.settings.value.customSeed,
+                customAccent = vm.settings.value.customAccent
+            ) {
                 MainTabs(vm) {
                     // gguf 没有标准 MIME，用通配让其可选中任意文件，导入时按扩展名处理
                     pickModel.launch(arrayOf("application/octet-stream", "*/*"))
