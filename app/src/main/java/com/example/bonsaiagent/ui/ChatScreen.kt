@@ -34,13 +34,10 @@ fun ChatScreen(vm: MainViewModel) {
     val listState = rememberLazyListState()
 
     Box(Modifier.fillMaxSize()) {
-    Column(Modifier.fillMaxSize().padding(12.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         if (vm.chatMessages.isEmpty()) {
-            // v10.96：空状态引导 —— 别让用户对着一片空白发呆
-            EmptyWelcome(
-                Modifier.weight(1f).fillMaxWidth(),
-                onPrompt = { vm.sendChat(it) }
-            )
+            // v10.97：首页欢迎词不要，留白给 DeepSeek 的极简感
+            Spacer(Modifier.weight(1f))
         } else {
             LazyColumn(
                 Modifier.weight(1f).fillMaxWidth(),
@@ -59,23 +56,24 @@ fun ChatScreen(vm: MainViewModel) {
                 onClose = { vm.dismissPending() }
             )
         }
-        // v10.94：输入框仿 DeepSeek —— 圆角卡片、无边框、发送按钮内嵌
+        // v10.97：输入框仿 DeepSeek —— 压扁、半透明、圆角胶囊、小发送钮
         Surface(
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
             tonalElevation = 0.dp
         ) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                Modifier.fillMaxWidth().padding(start = 12.dp, end = 6.dp, top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.Bottom
             ) {
                 TextField(
                     value = input,
                     onValueChange = { input = it },
-                    placeholder = { Text("和本地模型聊聊…") },
+                    placeholder = { Text("发消息…") },
                     modifier = Modifier.weight(1f),
-                    maxLines = 5,
+                    maxLines = 3,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 15.sp),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
@@ -94,7 +92,7 @@ fun ChatScreen(vm: MainViewModel) {
                         }
                     },
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(34.dp)
                         .padding(bottom = 2.dp)
                         .clip(CircleShape)
                         .background(
@@ -108,7 +106,7 @@ fun ChatScreen(vm: MainViewModel) {
                         color = if (canSend) MaterialTheme.colorScheme.onPrimary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                         style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 22.sp, fontWeight = FontWeight.Medium
+                            fontSize = 17.sp, fontWeight = FontWeight.Medium
                         )
                     )
                 }
@@ -124,67 +122,6 @@ fun ChatScreen(vm: MainViewModel) {
     ) {
         GenStatusBar(vm)
     }
-    }
-}
-
-/**
- * v10.96：空状态欢迎页。
- * 参考 DeepSeek：中间一个品牌图形 + 一句问候 + 几个可点的快捷提问，
- * 让首次打开不再是一片空白。点快捷项直接发出去。
- */
-@Composable
-fun EmptyWelcome(modifier: Modifier = Modifier, onPrompt: (String) -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    val suggestions = listOf(
-        "用一句话介绍你自己",
-        "帮我写一段周末计划",
-        "解释一下什么是大语言模型"
-    )
-    Column(
-        modifier,
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // 品牌图形：盆栽意象（绿色圆底 + 叶子 emoji，纯 Compose 无需图片资源）
-        Surface(
-            shape = CircleShape,
-            color = cs.primaryContainer,
-            modifier = Modifier.size(72.dp)
-        ) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("🌱", fontSize = 36.sp)
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "你好，我是 Bonsai",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = cs.onSurface
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "一个完全跑在你手机上的本地助手",
-            style = MaterialTheme.typography.bodyMedium,
-            color = cs.onSurfaceVariant
-        )
-        Spacer(Modifier.height(28.dp))
-        suggestions.forEach { q ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(cs.surfaceVariant)
-                    .clickable { onPrompt(q) }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(q, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
-                Spacer(Modifier.weight(1f))
-                Text("↗", fontSize = 16.sp, color = cs.primary)
-            }
-        }
     }
 }
 

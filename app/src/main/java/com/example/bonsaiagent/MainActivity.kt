@@ -6,27 +6,35 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.bonsaiagent.ui.BonsaiTheme
 import com.example.bonsaiagent.ui.ChatScreen
 import com.example.bonsaiagent.ui.RouterScreen
 import com.example.bonsaiagent.ui.SettingsScreen
+import kotlinx.coroutines.launch
 import java.io.PrintWriter
 import java.io.StringWriter
 
@@ -107,45 +115,184 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
-    var tab by remember { mutableStateOf(0) }
-    val titles = listOf("对话", "智能体", "设置")
-    val navIcons = listOf(Icons.Filled.Chat, Icons.Filled.SmartToy, Icons.Filled.Settings)
     val ctx = LocalContext.current
     LaunchedEffect(Unit) { CrashCatcher.mark(ctx, "6 首帧已渲染") }
+    val scope = rememberCoroutineScope()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                        Text("BonsaiAgent", fontWeight = FontWeight.SemiBold)
+    // v10.97：历史会话抽屉（左滑 / 点两条杠打开），数据层后续补
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    // v10.97：设置 / Agent 切换改成顶部图标触发的全屏弹层
+    var showSettings by remember { mutableStateOf(false) }
+    var showRouter by remember { mutableStateOf(false) }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                modifier = Modifier.width(300.dp),
+                drawerContainerColor = Color.White
+            ) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "历史对话",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
+                Text(
+                    "会话历史记录即将上线，先从这里滑入切换场景",
+                    fontSize = 12.sp,
+                    color = Color(0xFF9CA3AF),
+                    modifier = Modifier.padding(horizontal = 20.dp)
+                )
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = Color(0xFFF0F0F2))
+                LazyColumnPlaceholder()
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    // v10.97：左上不要标题，换成两条杠（打开历史抽屉）
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            TwoBarsIcon()
+                        }
                     },
-                actions = {
-                    // 新会话：只清对话列表，不用退出 App
-                    if (tab != 2) {
-                        TextButton(onClick = { vm.newSession() }) { Text("新会话") }
-                    }
-                }
-            )
-        },
-        bottomBar = {
-            NavigationBar {
-                titles.forEachIndexed { i, t ->
-                    NavigationBarItem(
-                        selected = tab == i,
-                        onClick = { tab = i },
-                        label = { Text(t) },
-                        icon = { Icon(navIcons[i], contentDescription = t) }
+                    title = {},
+                    actions = {
+                        // v10.97：新对话 —— 对话框图标，右上角小加号
+                        IconButton(onClick = { vm.newSession() }) {
+                            Box(Modifier.size(24.dp)) {
+                                Icon(
+                                    Icons.Outlined.ChatBubbleOutline,
+                                    contentDescription = "新对话",
+                                    tint = Color(0xFF111111)
+                                )
+                                Box(
+                                    Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(11.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White)
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Add,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(9.dp),
+                                        tint = Color(0xFF111111)
+                                    )
+                                }
+                            }
+                        }
+                        // v10.97：切换 Agent —— 简约扳手
+                        IconButton(onClick = { showRouter = true }) {
+                            Icon(
+                                Icons.Filled.Build,
+                                contentDescription = "切换智能体",
+                                tint = Color(0xFF111111)
+                            )
+                        }
+                        // v10.97：设置 —— 简约齿轮
+                        IconButton(onClick = { showSettings = true }) {
+                            Icon(
+                                Icons.Filled.Settings,
+                                contentDescription = "设置",
+                                tint = Color(0xFF111111)
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.White,
+                        titleContentColor = Color(0xFF111111)
                     )
+                )
+            },
+            bottomBar = {}
+        ) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                ChatScreen(vm)
+            }
+        }
+    }
+
+    // v10.97：设置全屏弹层
+    if (showSettings) {
+        Dialog(
+            onDismissRequest = { showSettings = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Column(Modifier.fillMaxSize().background(Color.White)) {
+                TopAppBar(
+                    title = { Text("设置", fontWeight = FontWeight.Bold) },
+                    navigationIcon = {
+                        IconButton(onClick = { showSettings = false }) {
+                            Icon(Icons.Filled.Add, contentDescription = "关闭",
+                                modifier = Modifier.rotate(45f))
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+                )
+                Box(Modifier.fillMaxSize()) {
+                    SettingsScreen(vm, onPickModel)
                 }
             }
         }
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (tab) {
-                0 -> ChatScreen(vm)
-                1 -> RouterScreen(vm)
-                2 -> SettingsScreen(vm, onPickModel)
+    }
+
+    // v10.97：Agent 切换全屏弹层
+    if (showRouter) {
+        Dialog(
+            onDismissRequest = { showRouter = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Column(Modifier.fillMaxSize().background(Color.White)) {
+                TopAppBar(
+                    title = { Text("切换智能体", fontWeight = FontWeight.Bold) },
+                    navigationIcon = {
+                        IconButton(onClick = { showRouter = false }) {
+                            Icon(Icons.Filled.Add, contentDescription = "关闭",
+                                modifier = Modifier.rotate(45f))
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+                )
+                Box(Modifier.fillMaxSize()) {
+                    RouterScreen(vm)
+                }
             }
         }
+    }
+}
+
+// v10.97：两条杠图标（DeepSeek 式菜单杠），纯 Compose 无需图片
+@Composable
+private fun TwoBarsIcon() {
+    Column(
+        Modifier.size(24.dp).padding(vertical = 5.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Box(Modifier.fillMaxWidth().height(2.dp).clip(RoundedCornerShape(1.dp)).background(Color(0xFF111111)))
+        Box(Modifier.fillMaxWidth().height(2.dp).clip(RoundedCornerShape(1.dp)).background(Color(0xFF111111)))
+    }
+}
+
+// v10.97：历史会话占位列表
+@Composable
+private fun LazyColumnPlaceholder() {
+    Column(Modifier.fillMaxWidth().padding(20.dp)) {
+        Text(
+            "暂无历史会话",
+            fontSize = 13.sp,
+            color = Color(0xFF9CA3AF),
+            modifier = Modifier.padding(top = 20.dp)
+        )
+        Text(
+            "以后这里会列出你的对话记录，点一下就能回到那次对话",
+            fontSize = 12.sp,
+            color = Color(0xFFC7CBD1),
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }

@@ -2,12 +2,10 @@ package com.example.bonsaiagent.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 
 /**
  * 界面配色：一套种子色推导整套明暗色板。
@@ -16,7 +14,19 @@ import androidx.compose.ui.graphics.lerp
  * 现在给 7 套预设，用户可在设置页随时切换，选择存进 SharedPreferences。
  * 每套只定义「主色 + 强调色」两个种子，其余明暗色阶由 lerp 推导，
  * 这样新增一套配色只要加一行。
+ *
+ * v10.97：用户要求「颜色固定用和 DeepSeek 一样的白底浅蓝按钮」，
+ * 因此 BonsaiTheme 改为强制 DeepSeek 浅色板（忽略 presetKey/custom*），
+ * 走极简路线：纯白底、品牌蓝主色、浅蓝填充按钮、浅灰半透明输入框。
+ * 参数保留以便向后兼容调用处，但不再影响实际配色。
  */
+// DeepSeek 品牌蓝
+private val DS_BLUE = Color(0xFF4D6BFE)
+// 浅蓝填充（功能按钮底 / 选中态）
+private val DS_BLUE_LIGHT = Color(0xFFEEF2FF)
+// 输入框浅灰
+private val DS_GREY = Color(0xFFF5F5F7)
+
 data class ThemePreset(
     val key: String,
     val label: String,
@@ -41,46 +51,27 @@ fun presetByKey(key: String): ThemePreset =
 fun customPreset(seed: Long, accent: Long): ThemePreset =
     ThemePreset("Custom", "自定义", seed, accent)
 
-private fun buildScheme(seed: Color, accent: Color, dark: Boolean) =
-    if (dark) darkColorScheme(
-        primary = lerp(seed, Color.White, 0.42f),
-        onPrimary = lerp(seed, Color.Black, 0.78f),
-        primaryContainer = lerp(seed, Color.Black, 0.58f),
-        onPrimaryContainer = lerp(seed, Color.White, 0.78f),
-        secondary = lerp(accent, Color.White, 0.35f),
-        onSecondary = lerp(accent, Color.Black, 0.75f),
-        secondaryContainer = lerp(accent, Color.Black, 0.55f),
-        onSecondaryContainer = lerp(accent, Color.White, 0.80f),
-        tertiary = lerp(seed, Color.White, 0.55f),
-        onTertiary = lerp(seed, Color.Black, 0.75f),
-        background = lerp(seed, Color.Black, 0.93f),
-        onBackground = lerp(seed, Color.White, 0.86f),
-        surface = lerp(seed, Color.Black, 0.89f),
-        onSurface = lerp(seed, Color.White, 0.86f),
-        surfaceVariant = lerp(seed, Color.Black, 0.82f),
-        onSurfaceVariant = lerp(seed, Color.White, 0.66f),
-        outline = lerp(seed, Color.White, 0.50f),
-        outlineVariant = lerp(seed, Color.Black, 0.65f)
-    ) else lightColorScheme(
-        primary = seed,
-        onPrimary = Color.White,
-        primaryContainer = lerp(seed, Color.White, 0.82f),
-        onPrimaryContainer = lerp(seed, Color.Black, 0.62f),
-        secondary = accent,
-        onSecondary = Color.White,
-        secondaryContainer = lerp(accent, Color.White, 0.80f),
-        onSecondaryContainer = lerp(accent, Color.Black, 0.60f),
-        tertiary = lerp(seed, Color.Black, 0.20f),
-        onTertiary = Color.White,
-        background = lerp(seed, Color.White, 0.965f),
-        onBackground = lerp(seed, Color.Black, 0.85f),
-        surface = Color.White,
-        onSurface = lerp(seed, Color.Black, 0.85f),
-        surfaceVariant = lerp(seed, Color.White, 0.90f),
-        onSurfaceVariant = lerp(seed, Color.Black, 0.72f),
-        outline = lerp(seed, Color.Black, 0.50f),
-        outlineVariant = lerp(seed, Color.White, 0.75f)
-    )
+// v10.97：固定 DeepSeek 浅色板，不再按预设推导
+private fun deepSeekLight() = lightColorScheme(
+    primary = DS_BLUE,
+    onPrimary = Color.White,
+    primaryContainer = DS_BLUE_LIGHT,
+    onPrimaryContainer = Color(0xFF1B2A6B),
+    secondary = DS_BLUE,
+    onSecondary = Color.White,
+    secondaryContainer = DS_BLUE_LIGHT,
+    onSecondaryContainer = Color(0xFF1B2A6B),
+    tertiary = Color(0xFF1B2A6B),
+    onTertiary = Color.White,
+    background = Color.White,
+    onBackground = Color(0xFF111111),
+    surface = Color.White,
+    onSurface = Color(0xFF111111),
+    surfaceVariant = DS_GREY,
+    onSurfaceVariant = Color(0xFF6B7280),
+    outline = Color(0xFFD1D5DB),
+    outlineVariant = Color(0xFFE5E7EB)
+)
 
 @Composable
 fun BonsaiTheme(
@@ -90,11 +81,8 @@ fun BonsaiTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    val p = if (presetKey == "Custom") customPreset(customSeed, customAccent)
-            else presetByKey(presetKey)
-    val scheme = remember(p.key, p.seed, p.accent, darkTheme) {
-        buildScheme(Color(p.seed), Color(p.accent), darkTheme)
-    }
+    // v10.97：强制 DeepSeek 浅色，白底浅蓝按钮，忽略 presetKey/customSeed/customAccent/darkTheme
+    val scheme = remember { deepSeekLight() }
     MaterialTheme(
         colorScheme = scheme,
         typography = MaterialTheme.typography,
