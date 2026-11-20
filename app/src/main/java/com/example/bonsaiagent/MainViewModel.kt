@@ -1322,7 +1322,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 用文件名判断（LLM 侧拿不到架构名，文件名是最可靠的信号）。
      */
     private fun isNonThinkModel(): Boolean =
-        modelPath.value?.let { java.io.File(it).name.contains("lfm", ignoreCase = true) } ?: false
+        modelPath.value?.let {
+            val n = java.io.File(it).name
+            // LFM 系 + Qwen3-Instruct-2507 都是非思考模型，不能预填 <think>
+            n.contains("lfm", ignoreCase = true) || n.contains("2507", ignoreCase = true)
+        } ?: false
 
     /** 长期偏好的关键词。命中就直接弹卡片，不依赖模型抽取 */
     private val MEMORY_HINTS = listOf(
