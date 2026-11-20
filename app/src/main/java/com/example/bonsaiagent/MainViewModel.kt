@@ -1391,47 +1391,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (pushPending(guessKey(m), content, m)) return
         }
 
-        // ② 兜底：让模型再判断一次（失败完全静默）
-        if (memoryBusy || !Llama.isLoaded() || LiteRtEngine.isLoaded()) {
-            memLog("跳过模型抽取：busy=$memoryBusy loaded=${Llama.isLoaded()}")
-            return
-        }
-        memoryBusy = true
-        Thread({
-            try {
-                val prompt = buildString {
-                    append("<|im_start|>system\n")
-                    append("从对话里提取关于用户本人的长期信息。只限5类：身份/偏好/项目/设备/习惯。")
-                    append("只输出一行，格式：类别|内容。没有就输出 NONE。不要解释，不要引号。\n")
-                    append("<|im_end|>\n<|im_start|>user\n")
-                    append("用户：").append(userMsg.take(150)).append("\n")
-                    append("助手：").append(aiReply.take(150)).append("\n")
-                    append("<|im_end|>\n<|im_start|>assistant\n")
-                }
-                val sb = StringBuilder()
-                Llama.generate("", prompt, 0.2f, 10, 0.9f, 1.1f, 32) { sb.append(it) }
-                val line = sb.toString().trim()
-                    .lineSequence()
-                    .firstOrNull { it.isNotBlank() }
-                    ?.trim() ?: return@Thread
-                if (line.equals("NONE", true) || !line.contains("|")) return@Thread
-                val parts = line.split("|", limit = 2)
-                if (parts.size != 2) return@Thread
-                val key = parts[0].trim().take(6)
-                val content = parts[1].trim().trim('"').take(60)
-                if (content.length < 3) return@Thread
-                mainHandler.post {
-                    // 生成过程中可能又弹了一条，保持一次只问一条
-                    if (pendingFact.value == null) {
-                        pushPending(key, content, userMsg)
-                    }
-                }
-            } catch (_: Throwable) {
-                // 抽取失败完全静默，不影响对话
-            } finally {
-                memoryBusy = false
-            }
-        }, "mem-extract").start()
+        // v10.93：删掉"模型兜底"抽取。
+        // 原因：Llama 是单例（一个 handle + 一个回调 sink），后台记忆抽取再调
+        // Llama.generate() 会和主对话串台 —— 实测把记忆判断的 "NONE" 漏进聊天气泡，
+        // 且每轮偷偷跑一次抢模型，导致速度从 12 递减到 8。
+        // 现在只保留上面的关键词快速通道，没有并发、没有串台、没有抢模型。
+        memLog("跳过模型抽取（v10.93 起已移除）：$m")
     }
 
     fun newSession() {
