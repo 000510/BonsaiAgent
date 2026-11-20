@@ -12,6 +12,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.EnergySavingsLeaf
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,8 +38,8 @@ fun ChatScreen(vm: MainViewModel) {
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         if (vm.chatMessages.isEmpty()) {
-            // v10.97：首页欢迎词不要，留白给 DeepSeek 的极简感
-            Spacer(Modifier.weight(1f))
+            // v10.98：克制版空状态 —— 中央一个品牌图形 + 一句小字，不堆卡片
+            EmptyHint(Modifier.weight(1f).fillMaxWidth())
         } else {
             LazyColumn(
                 Modifier.weight(1f).fillMaxWidth(),
@@ -56,22 +58,21 @@ fun ChatScreen(vm: MainViewModel) {
                 onClose = { vm.dismissPending() }
             )
         }
-        // v10.97：输入框仿 DeepSeek —— 压扁、半透明、圆角胶囊、小发送钮
+        // v10.98：输入框 —— 压扁半透明胶囊，发送钮悬浮在内部右侧垂直居中
         Surface(
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
             tonalElevation = 0.dp
         ) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 12.dp, end = 6.dp, top = 2.dp, bottom = 2.dp),
-                verticalAlignment = Alignment.Bottom
+            Box(
+                Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 2.dp, bottom = 2.dp)
             ) {
                 TextField(
                     value = input,
                     onValueChange = { input = it },
                     placeholder = { Text("发消息…") },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth().padding(end = 42.dp),
                     maxLines = 3,
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 15.sp),
                     colors = TextFieldDefaults.colors(
@@ -92,8 +93,9 @@ fun ChatScreen(vm: MainViewModel) {
                         }
                     },
                     modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 2.dp)
                         .size(34.dp)
-                        .padding(bottom = 2.dp)
                         .clip(CircleShape)
                         .background(
                             if (canSend) MaterialTheme.colorScheme.primary
@@ -122,6 +124,42 @@ fun ChatScreen(vm: MainViewModel) {
     ) {
         GenStatusBar(vm)
     }
+    }
+}
+
+/**
+ * v10.98：克制版空状态 —— 参照 DeepSeek「中央品牌图形 + 一句问候」，
+ * 但做得更轻：浅蓝圆底 + 叶芽图标 + 一句灰字，不堆卡片、不抢戏。
+ * 用户对空态暂无明确想法，先给这个极简方案，不喜欢随时可去。
+ */
+@Composable
+fun EmptyHint(modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        modifier,
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = cs.primaryContainer,
+            modifier = Modifier.size(64.dp)
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Filled.EnergySavingsLeaf,
+                    contentDescription = "Bonsai",
+                    tint = cs.primary,
+                    modifier = Modifier.size(30.dp)
+                )
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(
+            "今天想聊点什么？",
+            fontSize = 15.sp,
+            color = Color(0xFF9CA3AF)
+        )
     }
 }
 

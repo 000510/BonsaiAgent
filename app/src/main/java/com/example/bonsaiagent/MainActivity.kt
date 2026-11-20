@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -119,20 +120,29 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
     LaunchedEffect(Unit) { CrashCatcher.mark(ctx, "6 首帧已渲染") }
     val scope = rememberCoroutineScope()
 
-    // v10.97：历史会话抽屉（左滑 / 点两条杠打开），数据层后续补
+    // v10.98：历史会话抽屉（左滑 / 点两条杠打开），数据层后续补
     val drawerState = rememberDrawerState(DrawerValue.Closed)
-    // v10.97：设置 / Agent 切换改成顶部图标触发的全屏弹层
+    // v10.98：设置 / Agent 切换入口挪到抽屉顶部
     var showSettings by remember { mutableStateOf(false) }
     var showRouter by remember { mutableStateOf(false) }
+    // v10.98：抽屉加宽，主页被推到只露右侧一小条（约 72dp）
+    val drawerWidth = (LocalConfiguration.current.screenWidthDp - 72).dp
 
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.width(300.dp),
+                modifier = Modifier.width(drawerWidth),
                 drawerContainerColor = Color.White
             ) {
-                Spacer(Modifier.height(12.dp))
+                // v10.98：抽屉上侧 —— 切换智能体 + 设置
+                DrawerEntry(Icons.Filled.Build, "切换智能体") {
+                    showRouter = true
+                }
+                DrawerEntry(Icons.Filled.Settings, "设置") {
+                    showSettings = true
+                }
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "历史对话",
                     fontWeight = FontWeight.Bold,
@@ -154,7 +164,7 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
         Scaffold(
             topBar = {
                 TopAppBar(
-                    // v10.97：左上不要标题，换成两条杠（打开历史抽屉）
+                    // v10.98：左上两条杠（打开历史抽屉）
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             TwoBarsIcon()
@@ -162,7 +172,7 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                     },
                     title = {},
                     actions = {
-                        // v10.97：新对话 —— 对话框图标，右上角小加号
+                        // v10.98：新对话 —— 对话框图标，右上角小加号
                         IconButton(onClick = { vm.newSession() }) {
                             Box(Modifier.size(24.dp)) {
                                 Icon(
@@ -185,22 +195,6 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                                     )
                                 }
                             }
-                        }
-                        // v10.97：切换 Agent —— 简约扳手
-                        IconButton(onClick = { showRouter = true }) {
-                            Icon(
-                                Icons.Filled.Build,
-                                contentDescription = "切换智能体",
-                                tint = Color(0xFF111111)
-                            )
-                        }
-                        // v10.97：设置 —— 简约齿轮
-                        IconButton(onClick = { showSettings = true }) {
-                            Icon(
-                                Icons.Filled.Settings,
-                                contentDescription = "设置",
-                                tint = Color(0xFF111111)
-                            )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -263,6 +257,22 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+// v10.98：抽屉顶部入口（图标 + 文字行，点击触发）
+@Composable
+private fun DrawerEntry(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = label, tint = Color(0xFF111111), modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(label, fontSize = 15.sp, color = Color(0xFF111111))
     }
 }
 
