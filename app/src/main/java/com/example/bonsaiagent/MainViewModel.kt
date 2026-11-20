@@ -192,7 +192,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *
      * @return (要显示的文本, 是否还在思考)
      */
-    private fun extractAnswer(raw: String): Pair<String, Boolean> {
+    private fun extractAnswer(raw: String, isReasoning: Boolean = true): Pair<String, Boolean> {
+        // v10.89：LFM2.5 这类非 <think> 模型不走思考标记解析，原样返回即可。
+        // 之前硬套 <think> 解析，模型输出的正文被当成"没有输出内容"。
+        if (!isReasoning) {
+            if (raw.isBlank()) return "（模型没有输出内容，可以换个说法再问一次）" to false
+            return raw to false
+        }
         val close = raw.indexOf("</think>")
         if (close >= 0) {
             val ans = raw.substring(close + 8).trimStart()
@@ -1309,6 +1315,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 只抽「身份/偏好/项目/设备/习惯」五类，一次最多一条，格式固定为 `类别|内容`。
      * 用最简单的竖线分隔而不是 JSON —— 小模型输出 JSON 时经常少括号，解析必炸。
      */
+    /**
+     * v10.89：判断当前加载的模型是不是"非 <think> 推理模型"。
+     * Ternary-Bonsai / Qwen 系会在 <think>...</think> 里思考，需要预填跳过 + 专门解析；
+     * LFM2.5 这类模型不吃这套，硬塞 <think> 会导致输出空/乱码。
+     * 用文件名判断（LLM 侧拿不到架构名，文件名是最可靠的信号）。
+     */
+    private fun isNonThinkModel(): Boolean =
+        modelPath.value?.let { java.io.File(it).name.contains("lfm", ignoreCase = true) } ?: false
+
     /** 长期偏好的关键词。命中就直接弹卡片，不依赖模型抽取 */
     private val MEMORY_HINTS = listOf(
         "以后", "下次", "记住", "别再", "不要叫", "叫我", "我喜欢", "我习惯",
@@ -1503,16 +1518,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             estChars += piece.length
         }
 
+        val reasoningModel = !isNonThinkModel()
         val prompt = buildString {
             for (h in history) append(h)
             append("<|im_start|>assistant\n")
-            // v6.6：跳过思考阶段。
-            // Ternary-Bonsai 是推理模型，会在 <think>...</think> 里先想一大段。
-            // 实测让它自由思考：写 1000 字作文时闷头想了 200 个 token（约 30 秒）
-            // 然后崩溃，界面上一直显示"思考中…"，用户什么也看不到。
-            // 这里直接把思维链的结尾预填进去，模型会认为思考已结束，立刻开始写正文。
-            // 代价：复杂推理的质量会略降；收益：少等半分钟，且避开这条崩溃路径。
-            append("<think>\n\n</think>\n")
+            // v6.6：跳过思考阶段（仅 Ternary-Bonsai / Qwen 这类 <think> 推理模型）。
+            // v10.89：LFM2.5 等非 <think> 模型不能塞这段，否则模型会把正文写进思考区
+            // 或直接吐空串 → 界面显示"模型没有输出内容"。
+            if (reasoningModel) {
+                append("<think>\n\n</think>\n")
+            }
         }
         genStatus.value = GenStatus(phase = "处理输入")
         viewModelScope.launch(Dispatchers.IO) {
@@ -1534,7 +1549,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val now = System.currentTimeMillis()
                     if (now - lastUiAt >= 60L) {
                         lastUiAt = now
-                        val (answer, thinking) = extractAnswer(buf.toString())
+                        val (answer, thinking) = extractAnswer(buf.toString(), reasoningModel)
                         val show = if (thinking) "（思考中…）" else answer
                         val sec = (now - firstTokAt) / 1000.0
                         val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
@@ -1558,7 +1573,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             worker.join()
             // v10.84：节流会漏掉最后几十毫秒的字，收尾时用完整缓冲补一次，
             // 保证界面上显示的是全文（顺带修了原来"一个字都没写进去"的兜底）
-            mainHandler.post { ai.content.value = extractAnswer(buf.toString()).first }
+            mainHandler.post { ai.content.value = extractAnswer(buf.toString(), reasoningModel).first }
             val st = genStatus.value
             mainHandler.post {
                 genStatus.value = st.copy(phase = "完成")
@@ -1653,12 +1668,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 前缀（system）每轮完全一样，交给 native 层做 KV 缓存复用；
         // 历史放进变化部分 —— 否则前缀一变，缓存就失效了。
         val sysPrefix = "<|im_start|>system\n" + sysAgent + "<|im_end|>\n"
+        val reasoningModel = !isNonThinkModel()
         val prompt = buildString {
             // v8.1：Agent 每轮独立判断，不带历史 —— 历史会让每轮 prefill 越来越长
             // （实测 18→20→24 秒的递增就是它 + 缓存失效共同造成的）。
             append("<|im_start|>user\n[现在 ").append(nowStr).append("] ").append(msg).append("<|im_end|>\n")
             append("<|im_start|>assistant\n")
-            append("<think>\n\n</think>\n")
+            // v10.89：LFM2.5 等非 <think> 模型不预填思考段
+            if (reasoningModel) append("<think>\n\n</think>\n")
         }
         genStatus.value = GenStatus(phase = "处理输入")
         viewModelScope.launch(Dispatchers.IO) {
@@ -1676,7 +1693,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     raw.append(it)
                     tokCount++
                     if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()
-                    val (answer, thinking) = extractAnswer(raw.toString())
+                    val (answer, thinking) = extractAnswer(raw.toString(), reasoningModel)
                     val show = if (thinking) "（思考中…）" else answer
                     val sec = (System.currentTimeMillis() - firstTokAt) / 1000.0
                     val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
@@ -1705,7 +1722,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // v10.6 关键修复：解析对象必须是模型真正输出的文本（raw），
             // 不能是 ai.content.value —— 从 v10.4 起界面内容在流式阶段是空的，
             // 拿它去解析永远得到"直接回答"，动作全部不执行（血泪教训）。
-            val finalText = extractAnswer(raw.toString()).first
+            val finalText = extractAnswer(raw.toString(), reasoningModel).first
             val allActions = Router.parseActions(finalText)
             when (val route = Router.parse(finalText)) {
                 is RouteResult.Cloud -> {
