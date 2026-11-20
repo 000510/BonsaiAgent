@@ -36,6 +36,9 @@ data class AgentSettings(
 
     // v10.83：界面配色。每个预设一个种子色，theme.kt 按种子推导整套明暗色板。
     val themePreset: String = "Moss",
+    // v10.94：自定义配色（themePreset=="Custom" 时生效），存 ARGB Long
+    val customSeed: Long = 0xFF2E7D58,
+    val customAccent: Long = 0xFFB87B32,
 
     // v10.85：上次成功加载的主模型路径。打开 App 时优先恢复它，
     // 不再靠「猜」——之前按最新导入或体积最大猜，都会误选到别的模型。
@@ -114,6 +117,8 @@ class SettingsStore(context: Context) {
         draftPath = sp.getString("draftPath", "") ?: "",
         draftMax = sp.getInt("draftMax", 3),
         themePreset = sp.getString("themePreset", "Moss") ?: "Moss",
+        customSeed = sp.getLong("customSeed", 0xFF2E7D58),
+        customAccent = sp.getLong("customAccent", 0xFFB87B32),
         lastModelPath = sp.getString("lastModelPath", "") ?: "",
         apiEnabled = sp.getBoolean("apiEnabled", false),
         deepseekKey = sp.getString("deepseekKey", "") ?: "",
@@ -135,6 +140,8 @@ class SettingsStore(context: Context) {
             putString("draftPath", s.draftPath)
             putInt("draftMax", s.draftMax)
             putString("themePreset", s.themePreset)
+            putLong("customSeed", s.customSeed)
+            putLong("customAccent", s.customAccent)
             putString("lastModelPath", s.lastModelPath)
             putString("systemPrompt", s.systemPrompt)
             putString("downloadSource", s.downloadSource)
