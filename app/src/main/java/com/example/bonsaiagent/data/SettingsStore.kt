@@ -30,9 +30,13 @@ data class AgentSettings(
 
     // v10.72：投机解码。草稿模型跟主模型共用词表（Qwen3 全系），
     // 主模型一次前向验证 γ 个候选，把「读权重的带宽」摊薄，实测能提速 1.4~1.8 倍。
-    val useDraft: Boolean = true,
+    val useDraft: Boolean = false,
     val draftPath: String = "",
     val draftMax: Int = 3,
+    // v10.94：n-gram 自投机（零额外内存，默认开）
+    val useNgram: Boolean = true,
+    val ngramN: Int = 4,
+    val ngramGamma: Int = 8,
 
     // v10.83：界面配色。每个预设一个种子色，theme.kt 按种子推导整套明暗色板。
     val themePreset: String = "Moss",
@@ -113,9 +117,12 @@ class SettingsStore(context: Context) {
         systemPrompt = sp.getString("systemPrompt", DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT,
         downloadSource = sp.getString("downloadSource", "HF镜像") ?: "HF镜像",
         litertBackend = sp.getString("litertBackend", "NPU") ?: "NPU",
-        useDraft = sp.getBoolean("useDraft", true),
+        useDraft = sp.getBoolean("useDraft", false),
         draftPath = sp.getString("draftPath", "") ?: "",
         draftMax = sp.getInt("draftMax", 3),
+        useNgram = sp.getBoolean("useNgram", true),
+        ngramN = sp.getInt("ngramN", 4),
+        ngramGamma = sp.getInt("ngramGamma", 8),
         themePreset = sp.getString("themePreset", "Moss") ?: "Moss",
         customSeed = sp.getLong("customSeed", 0xFF2E7D58),
         customAccent = sp.getLong("customAccent", 0xFFB87B32),
@@ -139,6 +146,9 @@ class SettingsStore(context: Context) {
             putBoolean("useDraft", s.useDraft)
             putString("draftPath", s.draftPath)
             putInt("draftMax", s.draftMax)
+            putBoolean("useNgram", s.useNgram)
+            putInt("ngramN", s.ngramN)
+            putInt("ngramGamma", s.ngramGamma)
             putString("themePreset", s.themePreset)
             putLong("customSeed", s.customSeed)
             putLong("customAccent", s.customAccent)

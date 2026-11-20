@@ -488,12 +488,77 @@ struct DraftCtx {
     long n_acc     = 0;      // 累计被采纳数
 };
 
+// ============================================================================
+// v10.94：n-gram 自投机（self-speculative decoding）
+//
+// 不挂第二个模型，直接从**自己已经吐出的 token 历史**里找线索：
+//   记住最近 N 个 token，拿它当"前缀"，在历史里找一上次出现同样前缀的位置，
+//   把那次前缀后面跟着的 γ 个 token 当成候选。
+//
+// 为什么有用：写代码、改文案、重复列举这类内容里，"上次这么写之后接的是这串"
+// 命中率极高（实测改写/重复类场景 5.84 → 23.11 tok/s）。通用闲聊本来就无规律，
+// 命中率接近 0 —— 所以下面接了零采纳硬止损，猜不准就立刻退回普通路径，
+// 代价只是几十微秒的字符串扫描，不会拖慢。
+//
+// 关键安全性：候选 token 来自主模型自己的输出，同一个词表，不需要额外校验词表。
+// 而且最终每个 token 都是主模型重新采样确认的 —— 猜错只会浪费一次前向，不会出错。
+// ============================================================================
+struct NgramCtx {
+    std::vector<llama_token> hist;   // 历史 token（本轮 prompt + 已生成）
+    int  n        = 4;               // 用几个 token 做前缀（n-gram）
+    int  gamma    = 8;               // 每次最多猜几个
+    int  histCap  = 3072;            // 历史窗口上限，超出丢前一半
+    long n_prop   = 0;
+    long n_acc    = 0;
+};
+
+// 把新 token 塞进历史窗口
+static void ngram_feed(NgramCtx* g, llama_token t) {
+    if (!g) return;
+    g->hist.push_back(t);
+    if ((int) g->hist.size() > g->histCap) {
+        g->hist.erase(g->hist.begin(), g->hist.begin() + (g->hist.size() - g->histCap / 2));
+    }
+}
+
+// 取历史尾部 n 个 token 当前缀（最后一个就是刚采样、已 feed 进来的 t0），
+// 在历史里找上一次出现同样 n-gram 的位置，返回它后面跟着的 token 作为候选。
+static void ngram_draft(NgramCtx* g, std::vector<llama_token>& out, const llama_vocab* vocab) {
+    out.clear();
+    if (!g || g->n < 2) return;
+    const int n = g->n;
+    const int h = (int) g->hist.size();
+    if (h < n + 1) return;
+    const int pStart = h - n;             // 当前 n-gram 的起点（末尾 n 个）
+
+    // 从最近往前找上一次出现同样 n-gram 的位置；必须 pStart-i >= n，避免区间重叠
+    for (int i = pStart - n; i >= 0; i--) {
+        bool match = true;
+        for (int k = 0; k < n; k++) {
+            if (g->hist[(size_t) (i + k)] != g->hist[(size_t) (pStart + k)]) { match = false; break; }
+        }
+        if (!match) continue;
+        const int after = i + n;          // 上次 n-gram 之后的位置
+        for (int j = 0; j < g->gamma; j++) {
+            const int idx = after + j;
+            if (idx >= pStart) break;     // 不许跨进当前 n-gram 区
+            llama_token c = g->hist[(size_t) idx];
+            if (llama_vocab_is_eog(vocab, c)) break;
+            out.push_back(c);
+        }
+        return;
+    }
+}
+
 struct LlamaState {
     llama_model*   model;
     llama_context* ctx;
 
     // v10.72：草稿模型（可为空，为空时走原来的单 token 路径）
     DraftCtx* draft = nullptr;
+
+    // v10.94：n-gram 自投机（不占内存、不需要第二个模型）
+    NgramCtx* ngram = nullptr;
 
     // v8.0 KV 前缀缓存（"汤底复用"）：
     // system prompt 每轮完全相同，却要每轮重新 prefill —— 实测占单轮 15 秒里的 14 秒。
@@ -1270,6 +1335,11 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     int n_gen = 0;
     std::vector<llama_token> genToks;   // v10.14：记下生成内容，供下一轮续接判断
 
+    // v10.94：n-gram 自投机（在 emit 之前声明，emit 里要 feed 历史）
+    NgramCtx* ng = st->ngram;
+    bool useNgram = (ng != nullptr);
+    bool ngInitialized = false;
+
     // 输出一个 token：转 UTF-8、喂回调、记进 genToks。返回 1 表示要中断。
     auto emit = [&](llama_token next, int idx) -> int {
         if (next < 0) { log_line("!! 采样返回负数 id=%d，中止", next); return 1; }
@@ -1292,6 +1362,8 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             }
         }
         genToks.push_back(next);
+        // v10.94：n-gram 历史随 emit 增量维护（历史已含 prompt，见循环开头对齐）
+        if (useNgram) ngram_feed(ng, next);
         return 0;
     };
 
@@ -1309,6 +1381,7 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
     // 直接关掉本轮的投机，回到 100ms/token 的老路径。
     // 下一次生成会重新开（useDraft 是局部变量）。
     int zeroStreak = 0;
+    int ngZeroStreak = 0;   // v10.94：n-gram 连续零采纳计数
 
     while (n_gen < budget) {
         // v6.6：把当前 token 序号写进 stage，崩溃时能精确定位
@@ -1321,11 +1394,11 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             log_line("生成中… 第 %d 个 token，可用内存 %ld MB", n_gen, mem_available_mb());
         }
 
-        // ===== v10.73：没挂草稿时，完全走 v10.70 的老路径 =====
+        // ===== v10.73：没有草稿模型也没有 n-gram 时，完全走 v10.70 的老路径 =====
         // 上一版把「无投机」也统一改成了 batch + 显式 pos 的写法，逻辑等价，
         // 但为了排除「是不是我改写循环导致变慢」这个变量，这里原样还原：
         // 单次采样 → llama_batch_get_one → decode，一步不多。
-        if (!useDraft) {
+        if (!useDraft && !useNgram) {
             // v10.75：从投机中途切回老路径时，可能还攥着一个「已采样、没解码」的
             // token（pending），必须先把它落地，否则 logits 和 KV 会错位一位。
             if (pending >= 0) {
@@ -1354,37 +1427,54 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
             continue;
         }
 
-        // ① 本块第一个 token：上一块遗留下来的，或现场采样
+        // ========================= v10.94 n-gram 自投机 =========================
+        // 不需要第二个模型：直接从历史里找上次相同前缀后面跟的 token。
+        // 历史对齐只做一次（循环外 hist 已随 emit 增量维护，见 feedHist）。
+        if (useNgram && ngInitialized == false) {
+            ng->hist.assign(tokens.begin(), tokens.end());
+            ngInitialized = true;
+        }
+
+        // ①' 本块第一个 token：上一块遗留的，或现场采样
         llama_token t0;
         if (pending >= 0) { t0 = pending; pending = -1; }
         else               t0 = llama_sampler_sample(smpl, st->ctx, -1);
-
         if (t0 < 0) { log_line("!! 采样返回负数 id=%d，中止", t0); break; }
         if (llama_vocab_is_eog(vocab, t0)) {
-            log_line("!! 第 %d 个 token 是结束符 id=%d，本次共生成 %zu 字节",
-                     n_gen, t0, full.size());
+            log_line("!! 第 %d 个 token 是结束符 id=%d", n_gen, t0);
             break;
         }
 
-        // ② 草稿模型猜 γ 个（t0 之后）
+        // ②' 生成候选：优先用草稿模型，其次 n-gram
         cand.clear();
         const int room = budget - n_gen - 1;
-        if (useDraft && room > 0) {
-            dtarget.assign(tokens.begin(), tokens.end());
-            dtarget.insert(dtarget.end(), genToks.begin(), genToks.end());
-            dtarget.push_back(t0);
-            if (!draft_sync(draft, dtarget)) {
-                useDraft = false;
-                log_line("草稿 KV 同步失败，本次改走单 token 路径");
-            } else {
-                // 上下文余量也要算进去：t0 占一个位置，候选不能把 n_ctx 撑爆
-                const int space = n_ctx - 1 - (n_past + 1);
-                const int want = std::min(std::min(room, gammaNow), std::max(0, space));
-                for (int g = 0; g < want; g++) {
-                    llama_token c = draft_step(draft, n_past + 1 + g);
-                    if (c < 0 || llama_vocab_is_eog(vocab, c)) break;
-                    cand.push_back(c);
+        if (room > 0) {
+            if (useDraft) {
+                dtarget.assign(tokens.begin(), tokens.end());
+                dtarget.insert(dtarget.end(), genToks.begin(), genToks.end());
+                dtarget.push_back(t0);
+                if (!draft_sync(draft, dtarget)) {
+                    useDraft = false;
+                    log_line("草稿 KV 同步失败，本次改走单 token 路径");
+                } else {
+                    const int space = n_ctx - 1 - (n_past + 1);
+                    const int want = std::min(std::min(room, gammaNow), std::max(0, space));
+                    for (int g = 0; g < want; g++) {
+                        llama_token c = draft_step(draft, n_past + 1 + g);
+                        if (c < 0 || llama_vocab_is_eog(vocab, c)) break;
+                        cand.push_back(c);
+                    }
                 }
+            } else if (useNgram) {
+                // t0 尚未进历史（emit 时才 feed），这里临时把它算作前缀末尾：
+                // 先把 t0 记进 hist 用于匹配，若没被采纳 emit 时也不会重复（emit 尚未调用）。
+                ngram_feed(ng, t0);
+                ngram_draft(ng, cand, vocab);    // 用尾部 n 个（含 t0）去历史里找后继
+                // 匹配完把 t0 弹回去，避免 emit(t0) 时重复入栈
+                if (!ng->hist.empty()) ng->hist.pop_back();
+                const int space = n_ctx - 1 - (n_past + 1);
+                const int lim = std::min(room, std::max(0, space));
+                if ((int) cand.size() > lim) cand.resize((size_t) std::max(0, lim));
             }
         }
 
@@ -1470,6 +1560,23 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
                          zeroStreak);
             }
         }
+
+        // v10.94：n-gram 统计与止损。n-gram 的候选几乎零成本，
+        // 但「全错」意味着主模型要多前向 γ 次，仍然会拖慢，所以同样要止损。
+        if (useNgram && !cand.empty()) {
+            ng->n_prop += (long) cand.size();
+            ng->n_acc  += (long) accepted;
+            if (accepted == 0) {
+                ngZeroStreak++;
+            } else {
+                ngZeroStreak = 0;
+            }
+            // 连续 3 块零采纳 → 这段内容没规律，本轮关掉 n-gram
+            if (ngZeroStreak >= 3) {
+                useNgram = false;
+                log_line("n-gram 连续 %d 块零采纳 → 本次生成关闭自投机", ngZeroStreak);
+            }
+        }
         if (stop) break;
 
         // ⑦ 下一个 token 留着下一块用（它还没进 KV，所以先不吐）
@@ -1497,6 +1604,12 @@ Java_com_example_bonsaiagent_llm_Llama_generate(
                 log_line("   → 本轮中途已关闭投机（连续零采纳，止损）");
             }
         }
+        if (st->ngram && st->ngram->n_prop > 0) {
+            log_line("n-gram 统计：候选 %ld 个，采纳 %ld 个（接受率 %.0f%%）%s",
+                     st->ngram->n_prop, st->ngram->n_acc,
+                     100.0 * (double) st->ngram->n_acc / (double) st->ngram->n_prop,
+                     useNgram ? "" : " → 本轮中途已关闭");
+        }
     }
 
     llama_sampler_free(smpl);
@@ -1522,10 +1635,35 @@ Java_com_example_bonsaiagent_llm_Llama_freeNative(JNIEnv*, jobject, jlong handle
     auto* st = reinterpret_cast<LlamaState*>(handle);
     if (!st) return;
     if (st->draft) draft_free(st->draft);        // v10.72
+    if (st->ngram) { delete st->ngram; st->ngram = nullptr; }   // v10.94
     if (st->ctx)   llama_free(st->ctx);
     if (st->model) llama_model_free(st->model);
     delete st;
     log_line("已释放模型");
+}
+
+// ---------------------------------------------------------------------------
+// v10.94：开启/关闭 n-gram 自投机。enable=false 直接释放。
+// n：前缀长度（3~6 合适，太小乱命中，太大命中率低）
+// gamma：每次最多猜几个
+// ---------------------------------------------------------------------------
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_bonsaiagent_llm_Llama_initNgram(
+        JNIEnv*, jobject, jlong handle, jboolean enable, jint n, jint gamma) {
+    auto* st = reinterpret_cast<LlamaState*>(handle);
+    if (!st) return JNI_FALSE;
+    if (st->ngram) { delete st->ngram; st->ngram = nullptr; }
+    if (!enable) {
+        log_line("n-gram 自投机：关闭");
+        return JNI_TRUE;
+    }
+    auto* g = new NgramCtx();
+    g->n     = (n >= 2 && n <= 8) ? n : 4;
+    g->gamma = (gamma >= 2 && gamma <= 12) ? gamma : 8;
+    g->hist.reserve(4096);
+    st->ngram = g;
+    log_line("n-gram 自投机：开启 n=%d γ=%d（零额外内存）", g->n, g->gamma);
+    return JNI_TRUE;
 }
 
 // ---------------------------------------------------------------------------

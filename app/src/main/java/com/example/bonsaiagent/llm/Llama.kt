@@ -42,6 +42,9 @@ object Llama {
     // v10.72：挂草稿模型（投机解码）。path 传 null/空/"none" = 关闭。
     private external fun initDraft(handle: Long, path: String, nThreads: Int, maxDraft: Int): Boolean
 
+    // v10.94：n-gram 自投机（不需要第二个模型，零额外内存）
+    private external fun initNgram(handle: Long, enable: Boolean, n: Int, gamma: Int): Boolean
+
     /** v10.27：把任意路径丢给原生 dlopen，返回 size + 成败 + 真实 dlerror */
     private external fun dlopenProbe(path: String): String
 
@@ -115,6 +118,23 @@ object Llama {
             initDraft(handle, p, threads, maxDraft)
         } catch (t: Throwable) {
             Log.e(TAG, "挂草稿模型失败: ${t.message}")
+            false
+        }
+    }
+
+    /**
+     * v10.94 n-gram 自投机：不用第二个模型，直接从自己已输出的 token 历史里
+     * 找「上次出现同样前缀之后接了什么」，作为候选走投验。
+     *
+     * 改写、续写、重复列举这类内容命中率很高；闲聊几乎没命中，会自动止损。
+     * 零额外内存（只存几千个 int），开着的代价可以忽略。
+     */
+    fun enableNgram(enable: Boolean, n: Int = 4, gamma: Int = 8): Boolean {
+        if (handle == 0L) return false
+        return try {
+            initNgram(handle, enable, n, gamma)
+        } catch (t: Throwable) {
+            Log.e(TAG, "配置 n-gram 失败: ${t.message}")
             false
         }
     }

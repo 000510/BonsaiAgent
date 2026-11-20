@@ -1191,6 +1191,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } else if (s0.useDraft) {
                     draftInfo = "\n（还没选草稿模型 → 纯单 token 生成，约 11 tok/s）"
                 }
+                // v10.94：n-gram 自投机 —— 零额外内存，直接开。
+                // 和草稿模型可以共存（草稿优先），单独开也能在改写/续写类内容上提速。
+                if (s0.useNgram) {
+                    val nok = Llama.enableNgram(true, s0.ngramN, s0.ngramGamma)
+                    if (nok) {
+                        draftInfo += "\n⚡ n-gram 自投机已开（n=${s0.ngramN}，γ=${s0.ngramGamma}）"
+                    }
+                } else {
+                    try { Llama.enableNgram(false, 4, 8) } catch (_: Throwable) {}
+                }
             }
             withContext(Dispatchers.Main) {
                 modelLoaded.value = ok

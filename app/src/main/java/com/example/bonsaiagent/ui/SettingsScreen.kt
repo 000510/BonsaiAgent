@@ -278,8 +278,41 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         // ---------- 折叠组：实验性功能（投机解码 + 草稿模型 + LiteRT） ----------
         Divider(Modifier.padding(vertical = 8.dp))
         FoldSection("实验性功能") {
+            // v10.94：n-gram 自投机（推荐，零内存开销）
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("n-gram 自投机加速", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "从已输出内容里找重复片段来提速；改写/续写明显变快，闲聊无影响，不占内存",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = s.useNgram,
+                    onCheckedChange = { vm.updateSettings(s.copy(useNgram = it)) }
+                )
+            }
+            if (s.useNgram) {
+                Text("前缀长度 n=${s.ngramN}　每块猜 γ=${s.ngramGamma}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(3, 4, 5).forEach { n ->
+                        val on = s.ngramN == n
+                        if (on) Button(onClick = {}) { Text("n=$n") }
+                        else OutlinedButton(onClick = { vm.updateSettings(s.copy(ngramN = n)) }) { Text("n=$n") }
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Divider()
+            Spacer(Modifier.height(8.dp))
             Text(
-                "投机解码目前仅对重复/改写类内容有效，通用对话反而变慢，默认不建议使用。",
+                "以下是旧版投机解码（需要额外挂一个草稿模型，通用对话反而变慢），一般不用动。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
