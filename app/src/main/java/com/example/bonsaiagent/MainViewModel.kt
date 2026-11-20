@@ -1549,7 +1549,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val now = System.currentTimeMillis()
                     if (now - lastUiAt >= 60L) {
                         lastUiAt = now
-                        val (answer, thinking) = extractAnswer(buf.toString(), reasoningModel)
+                        val (answer, thinking) = extractAnswer(buf.toString())
                         val show = if (thinking) "（思考中…）" else answer
                         val sec = (now - firstTokAt) / 1000.0
                         val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
@@ -1573,7 +1573,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             worker.join()
             // v10.84：节流会漏掉最后几十毫秒的字，收尾时用完整缓冲补一次，
             // 保证界面上显示的是全文（顺带修了原来"一个字都没写进去"的兜底）
-            mainHandler.post { ai.content.value = extractAnswer(buf.toString(), reasoningModel).first }
+            mainHandler.post { ai.content.value = extractAnswer(buf.toString()).first }
             val st = genStatus.value
             mainHandler.post {
                 genStatus.value = st.copy(phase = "完成")
@@ -1693,7 +1693,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     raw.append(it)
                     tokCount++
                     if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()
-                    val (answer, thinking) = extractAnswer(raw.toString(), reasoningModel)
+                    val (answer, thinking) = extractAnswer(raw.toString())
                     val show = if (thinking) "（思考中…）" else answer
                     val sec = (System.currentTimeMillis() - firstTokAt) / 1000.0
                     val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
@@ -1722,7 +1722,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // v10.6 关键修复：解析对象必须是模型真正输出的文本（raw），
             // 不能是 ai.content.value —— 从 v10.4 起界面内容在流式阶段是空的，
             // 拿它去解析永远得到"直接回答"，动作全部不执行（血泪教训）。
-            val finalText = extractAnswer(raw.toString(), reasoningModel).first
+            val finalText = extractAnswer(raw.toString()).first
             val allActions = Router.parseActions(finalText)
             when (val route = Router.parse(finalText)) {
                 is RouteResult.Cloud -> {
