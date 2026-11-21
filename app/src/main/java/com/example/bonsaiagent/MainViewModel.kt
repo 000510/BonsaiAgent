@@ -1614,65 +1614,81 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * v10.118：网页搜索 — 抓正文后用 1B 小模型快速总结。
-     * 1B 用完即卸载，把内存还给系统（避免和 4B 长期共存拖慢速度）。
+     * v10.119：网页搜索 — 抓 Bing 正文，交给 4B 主模型总结。
+     * 不用 1B：小模型能力太弱，只会把结果前几条原样复述，答非所问。
      */
     private fun searchAndSummarize(query: String, ai: ChatMessage) {
+        if (!Llama.isLoaded()) { status.value = "请先在设置页导入并加载模型"; return }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                withContext(Dispatchers.Main) { ai.content.value = "🔍 正在搜索「$query」…" }
+                mainHandler.post { ai.content.value = "🔍 正在搜索「$query」…" }
                 val material = WebSearch.search(query)
-                withContext(Dispatchers.Main) { ai.content.value = "🔍 搜到了，正在整理…\n\n$material" }
-
-                // 找 1B 小模型（文件名含 1b/minicpm/qwen3-0 / 体积 < 1.2GB 的 gguf）
-                val modelsDir = java.io.File(appRef.filesDir, "models")
-                val fastModel = modelsDir.listFiles()?.filter {
-                    it.name.endsWith(".gguf", true) && it.length() < 1300L * 1024 * 1024 &&
-                    (it.name.contains("1b", true) || it.name.contains("minicpm", true) ||
-                     it.name.contains("0.5b", true) || it.name.contains("qwen2.5-1", true))
-                }?.firstOrNull()
-
-                if (fastModel == null) {
-                    // 没装 1B：直接显示抓到的原始资料，不总结
-                    withContext(Dispatchers.Main) {
-                        ai.content.value = "（未找到 1B 小模型，暂不总结）\n\n$material"
+                if (material.isBlank()) {
+                    mainHandler.post {
+                        ai.content.value = "没搜到「$query」的结果，换个说法试试～"
+                        genStatus.value = GenStatus("就绪")
                     }
                     return@launch
                 }
+                mainHandler.post { ai.content.value = "🔍 搜到了，正在整理…" }
 
-                var loadedHere = false
-                if (!Llama.isFastLoaded()) {
-                    val be = appRef.applicationInfo.nativeLibraryDir
-                    loadedHere = Llama.loadFast(fastModel.absolutePath, 4, 2048, be)
-                }
-                if (!Llama.isFastLoaded()) {
-                    withContext(Dispatchers.Main) { ai.content.value = "（1B 模型加载失败）\n\n$material" }
-                    return@launch
-                }
+                val s = settings.value
+                val sysPrefix = "<|im_start|>system\n你是信息助理。只根据用户给出的搜索结果作答，用简洁中文，不要编造结果里没有的内容，不要罗列网页标题。\n" +
+                        "用户问"天气"就报天气，问"新闻"就说新闻，直接给结论。<|im_end|>\n"
+                val prompt = "<|im_start|>user\n用户问题：$query\n\n搜索结果：\n${material.take(1100)}\n<|im_end|>\n<|im_start|>assistant\n"
 
-                val sys = "<|im_start|>system\n你是网页信息整理助手。根据提供的搜索结果，用简洁中文回答用户问题，不要编造结果里没有的信息。<|im_end|>\n"
-                val prompt = "<|im_start|>user\n用户问题：$query\n\n搜索结果：\n${material.take(1200)}\n<|im_end|>\n<|im_start|>assistant\n"
                 val buf = StringBuilder()
-                Llama.generateFast(sys, prompt, 0.7f, 40, 0.95f, 1.1f, 300) { piece ->
-                    buf.append(piece)
-                    val snap = buf.toString()
-                    mainHandler.post { ai.content.value = snap }
+                val t0 = System.currentTimeMillis()
+                var firstTokAt = 0L
+                var tokCount = 0
+                var lastUiAt = 0L
+                // 和主对话一样：大栈线程 + 最高优先级，避免搜索时又慢又卡
+                val worker = Thread(null, Runnable {
+                    try { android.os.Process.setThreadPriority(-19) } catch (_: Throwable) {}
+                    Llama.generate(sysPrefix, prompt, 0.6f, 40, 0.95f, 1.1f, 400) {
+                        buf.append(it); tokCount++
+                        if (firstTokAt == 0L) firstTokAt = System.currentTimeMillis()
+                        val now = System.currentTimeMillis()
+                        if (now - lastUiAt >= 80L) {
+                            lastUiAt = now
+                            val (answer, thinking) = extractAnswer(buf.toString())
+                            val show = if (thinking) "（思考中…）\n🔍 搜索：$query" else answer
+                            val sec = (now - firstTokAt) / 1000.0
+                            val speed = if (sec > 0.05) (tokCount / sec).toFloat() else 0f
+                            mainHandler.post {
+                                ai.content.value = show
+                                genStatus.value = GenStatus(if (thinking) "思考中" else "生成中", speed, tokCount, show.length)
+                            }
+                        }
+                    }
+                }, "search-gen")
+                worker.start()
+                while (worker.isAlive) { delay(120) }
+                worker.join()
+
+                val full = extractAnswer(buf.toString()).first.ifBlank { "（没生成内容，以下是搜到的原文）\n\n$material" }
+                val el = (System.currentTimeMillis() - t0) / 1000.0
+                mainHandler.post {
+                    ai.content.value = full
+                    genStatus.value = GenStatus("完成", if (el > 0) (tokCount / el).toFloat() else 0f, tokCount, full.length, el)
                 }
-                val final = buf.toString().ifBlank { material }
-                withContext(Dispatchers.Main) {
-                    ai.content.value = final
-                    genStatus.value = GenStatus("就绪")
-                }
+                // 搜索结果里没有的原文，折叠在下面方便核对
+                stateFileNote(material)
             } catch (e: Throwable) {
-                withContext(Dispatchers.Main) {
+                mainHandler.post {
                     ai.content.value = "[搜索失败] ${e.message}"
                     genStatus.value = GenStatus("就绪")
                 }
-            } finally {
-                // 用完就卸载 1B，把内存还给系统
-                try { Llama.unloadFast() } catch (_: Throwable) {}
             }
         }
+    }
+
+    /** 把搜索原文丢进侧栏记录，用户想核对时能翻到 */
+    private fun stateFileNote(material: String) {
+        try {
+            val f = java.io.File(appRef.filesDir, "search_log.txt")
+            f.appendText("\n===== ${java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date())} =====\n$material\n")
+        } catch (_: Throwable) {}
     }
 
     /** 页面2：混合路由 + Agent 执行 */
