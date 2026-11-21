@@ -243,15 +243,13 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                 .fillMaxSize()
                 .offset { IntOffset(drawerOffset.value.toInt(), 0) }
                 // v10.101：抽屉打开时主页面轻微缩小（DeepSeek 式立体感）
-                // v10.104: shadow 挪到 graphicsLayer 之前，主页面 alpha 不再冲淡阴影/缩小轮廓
-                .shadow(16.dp, RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp), clip = false)
+                // v10.105: 阴影放回缩放层之后(贴着缩放后边缘投影,不再错位产生脏渐变边)
                 .graphicsLayer {
                     val p = if (drawerWidthPx > 0f) drawerOffset.value / drawerWidthPx else 0f
                     val s = 1f - 0.04f * p
                     scaleX = s; scaleY = s
-                    // v10.103: 主页面全色 -> 80% 透明，透出底层抽屉、分清主次
-                    alpha = 1f - 0.2f * p
                 }
+                .shadow(16.dp, RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp), clip = false)
                 // v10.101：抽屉打开时点主页面任意处收回（indication=null 无水波）
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -259,6 +257,11 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                 ) { if (drawerOffset.value > 10f) closeDrawer() }
         ) {
             Scaffold(
+                // v10.105: 80%透明只作用于内容层(透出底层抽屉、分清主次),阴影在外层不受影响
+                modifier = Modifier.graphicsLayer {
+                    val p = if (drawerWidthPx > 0f) drawerOffset.value / drawerWidthPx else 0f
+                    alpha = 1f - 0.2f * p
+                },
                 topBar = {
                     TopAppBar(
                         // v10.100：顶栏保持主页面原样（两条杠 + 新对话），Agent 页不变样
