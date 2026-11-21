@@ -54,6 +54,15 @@ object FastRoute {
     /** 目标词末尾的泛化后缀：「Bil站」→「Bil」，「抖音app」→「抖音」 */
     private val SUFFIX_WORDS = listOf("站", "app", "App", "APP", "软件", "应用", "客户端")
 
+    // v10.122：明显是查询/问句，不是"说一个应用名"。
+    // 实测「南京明天天气怎么样」被 AppIndex.find 第5条（查询包含标签）误命中"天气"应用，
+    // 直接打开了天气APP。这类句子绝不走裸名匹配，交给模型（它会走 [ACTION:search]）。
+    private val QUERY_SENTENCE = Regex(
+        "天气|新闻|股价|股票|汇率|油价|限号|快递|航班|火车|彩票|黄历|日历|空气质量|" +
+            "温度|气温|多少度|几度|几点|几号|怎么样|怎么|如何|什么|为什么|是不是|多少|" +
+            "明天|今天|昨天|后天|预报|查询|查一下"
+    )
+
     /** 去掉客套前缀，便于后面的模式匹配 */
     private fun clean(s: String): String {
         var t = s.trim().replace(" ", "").replace("　", "")
@@ -135,6 +144,12 @@ object FastRoute {
         ) {
             return Hit.Act("battery")
         }
+
+        // v10.122：查询句（南京明天天气怎么样 / 今天南京天气如何）不是应用名。
+        // 到这里都是明确的"打开X/倒装X开一下/问时间/问电量"，能到这里的若是查询句，
+        // 就交给模型判断（它会走 [ACTION:search]）——否则会被 AppIndex.find 第5条
+        // "查询包含标签"误命中"天气"，直接开天气APP。
+        if (QUERY_SENTENCE.containsMatchIn(t)) return null
 
         // 4) 光说一个应用名：「微信」「B站」
         // 裸说一个应用名才算（不做模糊，避免「南京」误开「南京银行」）
