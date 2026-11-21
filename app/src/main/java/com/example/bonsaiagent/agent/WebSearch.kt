@@ -62,7 +62,10 @@ object WebSearch {
         val encFmt = URLEncoder.encode("%l | %c | %t | %C | 湿度%h | 风%w", "UTF-8").replace("+", "%20")
         val url = "https://wttr.in$path?format=$encFmt&lang=zh"
         return try {
-            val req = Request.Builder().url(url).header("User-Agent", UA).build()
+            // v10.125【修复】wttr.in 按 User-Agent 判断输出格式：浏览器 UA(Chrome)会返回整页
+            //   HTML(term-container 包装,见"输出002"),非浏览器 UA 才返回纯文本(实测)。
+            //   Bing 需要 Chrome UA,天气不要 —— 这里用 okhttp UA 让 wttr.in 走纯文本。
+            val req = Request.Builder().url(url).header("User-Agent", "okhttp/4.9.0").build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) "[天气查询失败 HTTP ${resp.code}]"
                 else resp.body?.string().orEmpty().trim().ifBlank { "[天气查询无数据]" }
