@@ -1617,6 +1617,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!Llama.isLoaded()) { status.value = "请先在设置页导入并加载模型"; return }
         val msg = text.trim()
         if (msg.isBlank()) return
+        // v10.117：复制指令在入口处硬性拦截(不经模型、不经FastRoute)——用于验证新代码是否真的部署。
+        // 显示独有的版本标记，一眼确认；同时真正执行复制。
+        if (msg.startsWith("复制") || msg.startsWith("拷贝")) {
+            val payload = msg.removePrefix("复制").removePrefix("拷贝")
+                .removeSuffix("一下").trim()
+            val user = ChatMessage("user").apply { content.value = msg }
+            val ai = ChatMessage("assistant")
+            agentMessages.add(user); agentMessages.add(ai)
+            val out = Actions.run(getApplication(), "copy", payload)
+            ai.content.value = "【v10.117】\n" + out
+            genStatus.value = GenStatus(phase = "就绪")
+            return
+        }
         val user = ChatMessage("user").apply { content.value = msg }
         val ai = ChatMessage("assistant")
         agentMessages.add(user); agentMessages.add(ai)
