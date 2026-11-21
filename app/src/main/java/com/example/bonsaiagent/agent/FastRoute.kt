@@ -102,6 +102,14 @@ object FastRoute {
     }
 
     fun match(ctx: Context, raw: String): Hit? {
+        // v10.116：复制指令走快路径——实测模型遇到"复制XX"会自己编"已复制"话术而不输出
+        // [ACTION:copy] 标签，导致复制从不执行。这里在原文上直接拦截，确定性执行。
+        val rawTrim = raw.trim()
+        Regex("^(请)?(帮我)?(复制|拷贝)(一下|这段|下面)?[:：\\s]*(.+)$").find(rawTrim)?.let { m ->
+            val payload = m.groupValues[4].trim()
+            if (payload.isNotEmpty()) return Hit.Act("copy", payload)
+        }
+
         val t = clean(raw)
         if (t.isEmpty() || t.length > 16) return null   // 太长的句子很可能带附加意图，交给模型
 
