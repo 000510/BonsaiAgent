@@ -82,6 +82,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var apiServer: LocalApiServer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * v10.120：同一时刻只允许一个生成任务占用模型。
+     * 搜索和对话共用同一个 llama context（native 的 KV 续接是按序列前缀比对的），
+     * 两条流同时跑会把对方的 KV 冲掉，表现为回答串味/乱码。
+     */
+    private val genLock = java.util.concurrent.atomic.AtomicBoolean(false)
+
     val settings = mutableStateOf(store.load())
     // v10.85：优先恢复上次加载的模型；没有记录才退回「排除草稿后取最大」
     val modelPath = mutableStateOf(
@@ -1428,6 +1435,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!Llama.isLoaded() && !LiteRtEngine.isLoaded()) {
             status.value = "请先在设置页导入并加载模型"; return
         }
+        // v10.120：搜索占着模型时别插队，否则两条流抢同一个 KV
+        if (genLock.get()) { status.value = "正在搜索/生成，等这条说完"; return }
         val msg = text.trim()
         if (msg.isBlank()) return
         // v10.20：LiteRT 走独立分支（它自己管历史，不拼 ChatML）
@@ -1619,6 +1628,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun searchAndSummarize(query: String, ai: ChatMessage) {
         if (!Llama.isLoaded()) { status.value = "请先在设置页导入并加载模型"; return }
+        if (!genLock.compareAndSet(false, true)) {
+            ai.content.value = "上一条还在生成，等它说完再搜～"
+            genStatus.value = GenStatus("就绪")
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 mainHandler.post { ai.content.value = "🔍 正在搜索「$query」…" }
@@ -1679,6 +1693,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ai.content.value = "[搜索失败] ${e.message}"
                     genStatus.value = GenStatus("就绪")
                 }
+            } finally {
+                genLock.set(false)
             }
         }
     }
@@ -1694,6 +1710,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** 页面2：混合路由 + Agent 执行 */
     fun sendAgent(text: String) {
         if (!Llama.isLoaded()) { status.value = "请先在设置页导入并加载模型"; return }
+        // v10.120：搜索占着模型时别插队
+        if (genLock.get()) { status.value = "正在搜索/生成，等这条说完"; return }
         val msg = text.trim()
         if (msg.isBlank()) return
         // v10.117：复制指令在入口处硬性拦截(不经模型、不经FastRoute)——用于验证新代码是否真的部署。
@@ -1709,17 +1727,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             genStatus.value = GenStatus(phase = "就绪")
             return
         }
-        // v10.118：搜索指令硬拦截——抓网页 + 用 1B 小模型快速总结
-        val searchQuery = msg.removePrefix("搜索").removePrefix("搜一下").removePrefix("查一下")
-            .removePrefix("联网搜索").removePrefix("上网搜").trim()
-        if ((msg.startsWith("搜索") || msg.startsWith("搜一下") || msg.startsWith("查一下") ||
-             msg.startsWith("联网搜索") || msg.startsWith("上网搜")) && searchQuery.isNotEmpty()) {
-            val user = ChatMessage("user").apply { content.value = msg }
-            val ai = ChatMessage("assistant")
-            agentMessages.add(user); agentMessages.add(ai)
-            searchAndSummarize(searchQuery, ai)
-            return
-        }
+        // v10.120：搜索不再按"用户说了搜索两个字"硬触发。
+        // 改由 4B 自己判断要不要联网，输出 [ACTION:search]关键词，走下面的动作循环。
         val user = ChatMessage("user").apply { content.value = msg }
         val ai = ChatMessage("assistant")
         agentMessages.add(user); agentMessages.add(ai)
@@ -1829,6 +1838,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         sb.append("[→ 动作] ").append(act.name)
                         act.arg?.let { sb.append(" (").append(it).append(")") }
                         sb.append("\n")
+                        // v10.120：搜索是流式长任务，单独走（要抓网页 + 让 4B 写答案），
+                        // 不能像同步动作那样拿返回值。显示交给 searchAndSummarize 自己刷。
+                        if (act.name == "search" && !act.arg.isNullOrBlank()) {
+                            mainHandler.post { ai.content.value = sb.toString() }
+                            searchAndSummarize(act.arg!!.trim(), ai)
+                            return@launch
+                        }
                         var out = Actions.run(app, act.name, act.arg)
                         // v10.3：模型会把口语应用名翻译坏（实测「bli站」→「Bli Station」）。
                         // 名字对不上时别信模型，回头用用户原话再认一次。

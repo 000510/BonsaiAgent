@@ -51,7 +51,10 @@ data class AgentSettings(
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述、不要夹英文。
 查时间[ACTION:time]、电量[ACTION:battery]、开应用[ACTION:openapp]应用名、打电话[ACTION:dialer]号码、开相机[ACTION:camera]、开相册[ACTION:gallery]、开设置[ACTION:settings]、开浏览器[ACTION:browser]网址、复制[ACTION:copy]文字、朗读[ACTION:speak]文字、分享[ACTION:share]文字。
-需要联网/查最新信息写[CALL_CLOUD]具体需求；用户说"搜索XX"会联网查并总结。普通问题直接用中文简短回答。"""
+需要联网查最新或你不确定的信息（新闻、天气实况、股价、某个词/人物/事件是什么），写[ACTION:search]关键词。
+搜索只在真的需要外部信息时才用：你自己知道答案的常识问题、闲聊、写东西，一律直接回答，不要搜。
+关键词只写要查的核心词，不要写整句话。例如用户问明天天气，写[ACTION:search]明天天气 城市名。
+普通问题直接用中文简短回答。"""
 
 class SettingsStore(context: Context) {
     private val sp: SharedPreferences =
@@ -129,6 +132,16 @@ class SettingsStore(context: Context) {
                 sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
             }
             sp.edit().putInt("prefsVersion", 16).apply()
+        }
+        // v10.120：搜索改成模型自主判断的 [ACTION:search]，不再是"用户说搜索就搜"。
+        // 命中旧版（含"用户说"搜索XX"会联网查"这句）就换新文案。
+        if (sp.getInt("prefsVersion", 1) < 17) {
+            val oldPrompt = sp.getString("systemPrompt", "") ?: ""
+            if (oldPrompt.contains("会联网查并总结") ||
+                oldPrompt.contains("需要联网/查最新信息写[CALL_CLOUD]")) {
+                sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
+            }
+            sp.edit().putInt("prefsVersion", 17).apply()
         }
         return loadInner()
     }
