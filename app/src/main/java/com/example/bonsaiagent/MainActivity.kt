@@ -66,6 +66,13 @@ class MainActivity : ComponentActivity() {
         uri?.let { vm.importModel(it) }
     }
 
+    // v10.109：手电筒需要的相机权限（运行时申请）
+    private val requestCamera = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        vm.status.value = if (granted) "相机权限已授予，手电筒可用 ✅" else "未授予相机权限，手电筒无法使用"
+    }
+
     @OptIn(ExperimentalLayoutApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,6 +83,14 @@ class MainActivity : ComponentActivity() {
         )
         CrashCatcher.install(applicationContext)
         CrashCatcher.mark(applicationContext, "2 崩溃捕获已安装")
+
+        // v10.109：预先申请相机权限，手电筒动作才能真正生效
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.CAMERA
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestCamera.launch(android.Manifest.permission.CAMERA)
+        }
 
         // 主动触发 ViewModel 创建，失败就把堆栈显示出来（而不是黑屏后直接退出）
         val bootError: String? = try {

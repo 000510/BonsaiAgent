@@ -4,6 +4,11 @@
     <!-- 调用 DeepSeek 云端需要联网；本机 API 走 127.0.0.1 需要允许 cleartext -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- v10.109：手电筒动作需要 CAMERA 权限（setTorchMode 从 API24 起强制校验） -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
+
     <!--
         Android 11（API 30）起 package visibility 默认收紧：
         不声明 <queries> 的话，queryIntentActivities 会「静默返回空列表」，

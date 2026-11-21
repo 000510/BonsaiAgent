@@ -192,24 +192,41 @@ object Actions {
                     if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) {
                         "[手电筒不可用] 需要 Android 6.0 以上"
                     } else {
-                        try {
-                            val cm = ctx.getSystemService(android.content.Context.CAMERA_SERVICE)
-                                    as android.hardware.camera2.CameraManager
-                            val camId = cm.cameraIdList.firstOrNull { id ->
-                                cm.getCameraCharacteristics(id)
-                                    .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                        // v10.109：先查相机权限，没授权就如实说，不再假报成功
+                        val hasCamera = android.content.pm.PackageManager.PERMISSION_GRANTED ==
+                            androidx.core.content.ContextCompat.checkSelfPermission(
+                                ctx, android.Manifest.permission.CAMERA)
+                        if (!hasCamera) {
+                            "[手电筒失败] 没有相机权限，请重新打开App并允许相机权限"
+                        } else {
+                            try {
+                                val cm = ctx.getSystemService(android.content.Context.CAMERA_SERVICE)
+                                        as android.hardware.camera2.CameraManager
+                                val camId = cm.cameraIdList.firstOrNull { id ->
+                                    cm.getCameraCharacteristics(id)
+                                        .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                                }
+                                if (camId == null) {
+                                    "[手电筒不可用] 这台设备没有闪光灯"
+                                } else {
+                                    val turnOn = !flashlightOn
+                                    cm.setTorchMode(camId, turnOn)
+                                    // 读回真实状态确认（API 30+），避免"假成功"
+                                    val actuallyOn = try {
+                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R)
+                                            cm.getTorchMode(camId) else turnOn
+                                    } catch (_: Throwable) { turnOn }
+                                    flashlightOn = actuallyOn
+                                    if (actuallyOn == turnOn) {
+                                        if (turnOn) "已打开手电筒 ✅" else "已关闭手电筒。"
+                                    } else {
+                                        "[手电筒失败] 系统未响应，可能被其他相机App占用。关掉相机类App再试。" +
+                                            if (turnOn) "（当前实际：${if (actuallyOn) "亮" else "灭"}）" else ""
+                                    }
+                                }
+                            } catch (e: Throwable) {
+                                "[手电筒失败] ${e.javaClass.simpleName}: ${e.message}"
                             }
-                            if (camId == null) {
-                                "[手电筒不可用] 这台设备没有闪光灯"
-                            } else {
-                                // 用静态标记记住开关状态
-                                val turnOn = !flashlightOn
-                                cm.setTorchMode(camId, turnOn)
-                                flashlightOn = turnOn
-                                if (turnOn) "已打开手电筒。" else "已关闭手电筒。"
-                            }
-                        } catch (e: Throwable) {
-                            "[手电筒失败] ${e.message}"
                         }
                     }
                 }
