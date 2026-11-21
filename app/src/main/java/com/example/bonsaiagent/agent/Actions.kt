@@ -159,7 +159,13 @@ object Actions {
                     if (text.isEmpty()) return "[复制失败] 没说要复制什么"
                     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                     cm.setPrimaryClip(android.content.ClipData.newPlainText("BonsaiAgent", text))
-                    "已复制：${text.take(40)}${if (text.length > 40) "…" else ""}"
+                    // v10.115：自检——写入后当场读回系统剪贴板，把真实内容显示出来，
+                    // 不再让 App 自报"已复制"。读回为空=真失败，读回=text=写进去了。
+                    val readBack = try {
+                        cm.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
+                    } catch (e: Throwable) { "<读取异常:${e.javaClass.simpleName}>" }
+                    "系统剪贴板读回：「$readBack」\n" +
+                        if (readBack == text) "✅ 写入成功" else "❌ 写入失败（想要：$text）"
                 }
 
                 // v10.108：朗读文本（TTS，系统自带，不占模型内存）
