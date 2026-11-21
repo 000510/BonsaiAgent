@@ -71,35 +71,50 @@ object WebSearch {
      */
     fun buildQuery(rawMsg: String, modelArg: String?): String {
         val fromModel = modelArg?.let { normalizeQuery(it) }.orEmpty()
-        if (fromModel.length >= 2) return fromModel
-        return normalizeQuery(rawMsg)
+        val base = if (fromModel.length >= 2) fromModel else normalizeQuery(rawMsg)
+        // v10.123【方案第1条】限8词：模型容易往词里塞累赘，超长就截断
+        val words = base.split(Regex("\\s+")).filter { it.isNotBlank() }
+        return if (words.size > 8) words.take(8).joinToString(" ") else base
     }
 
     /**
      * 搜索关键词，返回给模型看的"资料文本"（最多取 maxResults 条）。
-     * 用 Bing 中文版——返回的 HTML 里每条结果有 <li class="b_algo">...<h2>标题</h2>...<p>摘要</p>。
+     * v10.123【方案第2+3条】先筛后抓：
+     *   主源 Bing 中文版，但先做确定性过滤（排除登录/广告/导航类垃圾，只留前 3 条真内容），
+     *   过滤后为 0 或被拦截时自动切 DuckDuckGo html 版备胎 —— 不再把垃圾网页塞给 4B。
+     * 正文判废（<500字/登录验证）这层留给以后加"抓正文"时一起做，当前只靠 snippet。
      */
-    fun search(rawQuery: String, maxResults: Int = 5): String {
+    fun search(rawQuery: String, maxResults: Int = 3): String {
         val query = normalizeQuery(rawQuery)
         if (query.isBlank()) return "[搜索词为空]"
-        val url = "https://www.bing.com/search?q=" + URLEncoder.encode(query, "UTF-8") + "&setlang=zh-cn"
-        val req = Request.Builder()
-            .url(url)
-            .header("User-Agent", UA)
-            .build()
-        val html = try {
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return "[搜索失败 HTTP ${resp.code}]"
-                resp.body?.string().orEmpty()
-            }
-        } catch (e: Exception) {
-            return "[搜索失败] ${e.message}"
-        }
-        if (html.length < 200) return "[搜索无结果] 可能是网络问题或搜索引擎拦截"
+        val enc = URLEncoder.encode(query, "UTF-8")
 
+        val bingHtml = tryFetch("https://www.bing.com/search?q=$enc&setlang=zh-cn")
+        if (!bingHtml.isNullOrBlank()) {
+            val r = parseBing(bingHtml, query, maxResults)
+            if (r != null) return r
+        }
+        val ddgHtml = tryFetch("https://html.duckduckgo.com/html/?q=$enc")
+        if (!ddgHtml.isNullOrBlank()) {
+            val r = parseDuck(ddgHtml, query, maxResults)
+            if (r != null) return r
+        }
+        return "[搜索无结果] 可能是网络问题或搜索引擎拦截"
+    }
+
+    /** 抓 HTML，HTTP 失败/异常返回 null（让调用方切备胎源） */
+    private fun tryFetch(url: String): String? = try {
+        val req = Request.Builder().url(url).header("User-Agent", UA).build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) null else resp.body?.string().orEmpty()
+        }
+    } catch (_: Exception) { null }
+
+    /** Bing 结果页 → 过滤后最多 maxResults 条；没剩有用的返回 null（交给备胎源） */
+    private fun parseBing(html: String, query: String, maxResults: Int): String? {
+        if (html.length < 200) return null
         val sb = StringBuilder()
         sb.append("搜索「$query」的结果：\n")
-        // 提取 b_algo 块里的 <h2>标题</h2> 和 <p>摘要</p>
         val blockRe = Regex("<li class=\"b_algo\".*?</li>", RegexOption.DOT_MATCHES_ALL)
         val h2Re = Regex("<h2[^>]*>(.*?)</h2>", RegexOption.DOT_MATCHES_ALL)
         val pRe = Regex("<p[^>]*>(.*?)</p>", RegexOption.DOT_MATCHES_ALL)
@@ -109,17 +124,43 @@ object WebSearch {
             val title = h2Re.find(block.value)?.groupValues?.get(1)?.let { stripTags(it) }.orEmpty()
             val summary = pRe.find(block.value)?.groupValues?.get(1)?.let { stripTags(it) }.orEmpty()
             if (title.isEmpty() && summary.isEmpty()) continue
+            // 【先筛后抓】垃圾直接跳过：登录/注册/验证/广告/导航类，不配占名额
+            if (isGarbage(title, summary)) continue
             count++
             sb.append("$count. $title\n")
             if (summary.isNotEmpty()) sb.append("   $summary\n")
         }
-        if (count == 0) {
-            // 兜底：搜索引擎结构变了，退而求其次抓整页纯文本前 800 字
-            val plain = stripTags(html).replace(Regex("\\s+"), " ").trim()
-            if (plain.length > 30) sb.append(plain.take(800)) else return "[搜索无结果]"
-        }
-        return sb.toString().take(1500)   // 限制长度，控制 4B 的 prefill 时间
+        return if (count == 0) null else sb.toString().take(1500)
     }
+
+    /** DuckDuckGo html 版（无JS、反爬松）→ 同样过滤后最多 maxResults 条 */
+    private fun parseDuck(html: String, query: String, maxResults: Int): String? {
+        if (html.length < 200) return null
+        val sb = StringBuilder()
+        sb.append("搜索「$query」的结果：\n")
+        val titleRe = Regex("<a[^>]*class=\"result__a\"[^>]*>(.*?)</a>", RegexOption.DOT_MATCHES_ALL)
+        val snipRe = Regex("<a[^>]*class=\"result__snippet\"[^>]*>(.*?)</a>", RegexOption.DOT_MATCHES_ALL)
+        val titles = titleRe.findAll(html).map { stripTags(it.groupValues[1]) }.toList()
+        val snips = snipRe.findAll(html).map { stripTags(it.groupValues[1]) }.toList()
+        if (titles.isEmpty()) return null
+        var count = 0
+        for (i in titles.indices) {
+            if (count >= maxResults) break
+            val t = titles[i]
+            if (t.isBlank()) continue
+            val s = if (i < snips.size) snips[i] else ""
+            if (isGarbage(t, s)) continue
+            count++
+            sb.append("$count. $t\n")
+            if (s.isNotEmpty()) sb.append("   $s\n")
+        }
+        return if (count == 0) null else sb.toString().take(1500)
+    }
+
+    /** 垃圾信号：登录/注册/验证码/广告/推广/下载App/官方首页/优惠红包等 —— 这些不配给 4B 当材料 */
+    private val GARBAGE_RE = Regex("登录|注册|验证码|广告|推广|下载App|App下载|官方首页|猜你|优惠|红包|邀请码|立即下载|免费领取")
+    private fun isGarbage(title: String, summary: String): Boolean =
+        GARBAGE_RE.containsMatchIn(title + " " + summary)
 
     /**
      * v10.121：搜索词清洗 —— 这是本功能正确性的关键，实测如下：
