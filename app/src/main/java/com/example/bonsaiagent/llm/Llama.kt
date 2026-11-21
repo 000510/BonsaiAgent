@@ -17,6 +17,11 @@ object Llama {
     private var handle: Long = 0L
     private var pieceSink: ((String) -> Unit)? = null
 
+    // v10.118：第二个独立模型（1B 小模型，专做网页总结）。
+    // native 的 generate() 收 handle 参数，天生支持多实例；全局变量每次 generate 前会重置，
+    // 只要不与主模型同时生成就安全（网页总结时对话不会进行）。零 C++ 改动。
+    private var fastHandle: Long = 0L
+
     interface Callback {
         fun onToken(piece: String)
     }
@@ -96,6 +101,37 @@ object Llama {
         if (handle != 0L) {
             freeNative(handle)
             handle = 0L
+        }
+    }
+
+    // ---- v10.118：第二个独立模型（1B 网页总结专用）----
+
+    /** 加载小模型；返回是否成功。nCtx 用小值（512）省内存 */
+    fun loadFast(modelPath: String, threads: Int, nCtx: Int, backendDir: String? = null): Boolean {
+        unloadFast()
+        if (backendDir != null) setBackendPath(backendDir)
+        fastHandle = try {
+            init(modelPath, threads, nCtx, 0)
+        } catch (t: Throwable) {
+            Log.e(TAG, "loadFast failed", t)
+            0L
+        }
+        return fastHandle != 0L
+    }
+
+    fun isFastLoaded(): Boolean = fastHandle != 0L
+
+    /** 用快速模型生成（复用同一套 native generate，只传不同的 handle） */
+    fun generateFast(sysPrefix: String, prompt: String, temp: Float, topK: Int, topP: Float,
+                     repPen: Float, maxTokens: Int, onPiece: (String) -> Unit): String {
+        pieceSink = onPiece
+        return generate(fastHandle, sysPrefix, prompt, temp, topK, topP, repPen, maxTokens)
+    }
+
+    fun unloadFast() {
+        if (fastHandle != 0L) {
+            freeNative(fastHandle)
+            fastHandle = 0L
         }
     }
 

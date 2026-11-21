@@ -51,7 +51,7 @@ data class AgentSettings(
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述、不要夹英文。
 查时间[ACTION:time]、电量[ACTION:battery]、开应用[ACTION:openapp]应用名、打电话[ACTION:dialer]号码、开相机[ACTION:camera]、开相册[ACTION:gallery]、开设置[ACTION:settings]、开浏览器[ACTION:browser]网址、复制[ACTION:copy]文字、朗读[ACTION:speak]文字、分享[ACTION:share]文字。
-需要联网/查最新信息写[CALL_CLOUD]具体需求。普通问题直接用中文简短回答。"""
+需要联网/查最新信息写[CALL_CLOUD]具体需求；用户说"搜索XX"会联网查并总结。普通问题直接用中文简短回答。"""
 
 class SettingsStore(context: Context) {
     private val sp: SharedPreferences =
@@ -121,6 +121,14 @@ class SettingsStore(context: Context) {
                 sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
             }
             sp.edit().putInt("prefsVersion", 15).apply()
+        }
+        // v10.118：提示词加搜索能力说明
+        if (sp.getInt("prefsVersion", 1) < 16) {
+            val oldPrompt = sp.getString("systemPrompt", "") ?: ""
+            if (oldPrompt.contains("需要联网/查最新信息写[CALL_CLOUD]具体需求。普通问题")) {
+                sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
+            }
+            sp.edit().putInt("prefsVersion", 16).apply()
         }
         return loadInner()
     }

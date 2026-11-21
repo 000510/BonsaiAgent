@@ -15,6 +15,7 @@ import com.example.bonsaiagent.agent.Executor
 import com.example.bonsaiagent.agent.FastRoute
 import com.example.bonsaiagent.agent.Router
 import com.example.bonsaiagent.agent.RouteResult
+import com.example.bonsaiagent.agent.WebSearch
 import com.example.bonsaiagent.api.LocalApiServer
 import com.example.bonsaiagent.data.AgentSettings
 import com.example.bonsaiagent.data.MemoryFact
@@ -1612,6 +1613,68 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * v10.118：网页搜索 — 抓正文后用 1B 小模型快速总结。
+     * 1B 用完即卸载，把内存还给系统（避免和 4B 长期共存拖慢速度）。
+     */
+    private fun searchAndSummarize(query: String, ai: ChatMessage) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                withContext(Dispatchers.Main) { ai.content.value = "🔍 正在搜索「$query」…" }
+                val material = WebSearch.search(query)
+                withContext(Dispatchers.Main) { ai.content.value = "🔍 搜到了，正在整理…\n\n$material" }
+
+                // 找 1B 小模型（文件名含 1b/minicpm/qwen3-0 / 体积 < 1.2GB 的 gguf）
+                val modelsDir = java.io.File(appRef.filesDir, "models")
+                val fastModel = modelsDir.listFiles()?.filter {
+                    it.name.endsWith(".gguf", true) && it.length() < 1300L * 1024 * 1024 &&
+                    (it.name.contains("1b", true) || it.name.contains("minicpm", true) ||
+                     it.name.contains("0.5b", true) || it.name.contains("qwen2.5-1", true))
+                }?.firstOrNull()
+
+                if (fastModel == null) {
+                    // 没装 1B：直接显示抓到的原始资料，不总结
+                    withContext(Dispatchers.Main) {
+                        ai.content.value = "（未找到 1B 小模型，暂不总结）\n\n$material"
+                    }
+                    return@launch
+                }
+
+                var loadedHere = false
+                if (!Llama.isFastLoaded()) {
+                    val be = appRef.applicationInfo.nativeLibraryDir
+                    loadedHere = Llama.loadFast(fastModel.absolutePath, 4, 2048, be)
+                }
+                if (!Llama.isFastLoaded()) {
+                    withContext(Dispatchers.Main) { ai.content.value = "（1B 模型加载失败）\n\n$material" }
+                    return@launch
+                }
+
+                val sys = "<|im_start|>system\n你是网页信息整理助手。根据提供的搜索结果，用简洁中文回答用户问题，不要编造结果里没有的信息。<|im_end|>\n"
+                val prompt = "<|im_start|>user\n用户问题：$query\n\n搜索结果：\n${material.take(1200)}\n<|im_end|>\n<|im_start|>assistant\n"
+                val buf = StringBuilder()
+                Llama.generateFast(sys, prompt, 0.7f, 40, 0.95f, 1.1f, 300) { piece ->
+                    buf.append(piece)
+                    val snap = buf.toString()
+                    mainHandler.post { ai.content.value = snap }
+                }
+                val final = buf.toString().ifBlank { material }
+                withContext(Dispatchers.Main) {
+                    ai.content.value = final
+                    genStatus.value = GenStatus("就绪")
+                }
+            } catch (e: Throwable) {
+                withContext(Dispatchers.Main) {
+                    ai.content.value = "[搜索失败] ${e.message}"
+                    genStatus.value = GenStatus("就绪")
+                }
+            } finally {
+                // 用完就卸载 1B，把内存还给系统
+                try { Llama.unloadFast() } catch (_: Throwable) {}
+            }
+        }
+    }
+
     /** 页面2：混合路由 + Agent 执行 */
     fun sendAgent(text: String) {
         if (!Llama.isLoaded()) { status.value = "请先在设置页导入并加载模型"; return }
@@ -1628,6 +1691,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val out = Actions.run(getApplication(), "copy", payload)
             ai.content.value = "【v10.117】\n" + out
             genStatus.value = GenStatus(phase = "就绪")
+            return
+        }
+        // v10.118：搜索指令硬拦截——抓网页 + 用 1B 小模型快速总结
+        val searchQuery = msg.removePrefix("搜索").removePrefix("搜一下").removePrefix("查一下")
+            .removePrefix("联网搜索").removePrefix("上网搜").trim()
+        if ((msg.startsWith("搜索") || msg.startsWith("搜一下") || msg.startsWith("查一下") ||
+             msg.startsWith("联网搜索") || msg.startsWith("上网搜")) && searchQuery.isNotEmpty()) {
+            val user = ChatMessage("user").apply { content.value = msg }
+            val ai = ChatMessage("assistant")
+            agentMessages.add(user); agentMessages.add(ai)
+            searchAndSummarize(searchQuery, ai)
             return
         }
         val user = ChatMessage("user").apply { content.value = msg }
