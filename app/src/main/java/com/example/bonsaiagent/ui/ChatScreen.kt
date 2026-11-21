@@ -5,6 +5,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -34,6 +35,7 @@ import com.example.bonsaiagent.data.MemoryFact
 import com.example.bonsaiagent.MainViewModel
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun ChatScreen(vm: MainViewModel) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()

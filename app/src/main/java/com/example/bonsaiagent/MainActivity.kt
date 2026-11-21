@@ -9,6 +9,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -50,6 +51,7 @@ class MainActivity : ComponentActivity() {
         uri?.let { vm.importModel(it) }
     }
 
+    @OptIn(ExperimentalLayoutApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashCatcher.mark(applicationContext, "1 onCreate 开始")
@@ -141,7 +143,7 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
             ModalDrawerSheet(
                 modifier = Modifier.width(drawerWidth),
                 drawerContainerColor = Color.White,
-                drawerElevation = 12.dp
+                drawerTonalElevation = 12.dp
             ) {
                 // v10.99：设置 / 切换智能体 —— 图标水平排布、小巧
                 Row(
