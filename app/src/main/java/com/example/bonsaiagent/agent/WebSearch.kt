@@ -21,7 +21,8 @@ object WebSearch {
      * 搜索关键词，返回给模型看的"资料文本"（最多取 maxResults 条）。
      * 用 Bing 中文版——返回的 HTML 里每条结果有 <li class="b_algo">...<h2>标题</h2>...<p>摘要</p>。
      */
-    fun search(query: String, maxResults: Int = 5): String {
+    fun search(rawQuery: String, maxResults: Int = 5): String {
+        val query = normalizeQuery(rawQuery)
         if (query.isBlank()) return "[搜索词为空]"
         val url = "https://www.bing.com/search?q=" + URLEncoder.encode(query, "UTF-8") + "&setlang=zh-cn"
         val req = Request.Builder()
@@ -59,7 +60,38 @@ object WebSearch {
             val plain = stripTags(html).replace(Regex("\\s+"), " ").trim()
             if (plain.length > 30) sb.append(plain.take(800)) else return "[搜索无结果]"
         }
-        return sb.toString().take(1500)   // 限制长度，控制 1B 的 prefill 时间
+        return sb.toString().take(1500)   // 限制长度，控制 4B 的 prefill 时间
+    }
+
+    /**
+     * v10.121：搜索词清洗 —— 这是本功能正确性的关键，实测如下：
+     *
+     * 模型常把用户整句口语当搜索词（如「南京今天气温多少度」）。Bing 对这类
+     * 「带 今天/多少度/怎么样/日期」的长查询会判成历史/百科类，直接返回
+     * 南京历史、动物园、日历页，干货 0/5；而短核心词「南京天气预报」能命中
+     * 「今日天气：南京市，晴,4℃~15℃」。所以这里把时间词、语气词、冗余动词
+     * 全部剥掉，只留实体+主题词，把 Bing 拉回正常结果轨道。
+     *
+     * 词表按长度降序，避免「多少度」被「多少」「度」拆开残留。
+     */
+    private fun normalizeQuery(raw: String): String {
+        var s = raw.trim()
+        if (s.isBlank()) return s
+        val fillers = arrayOf(
+            // 时间/时效词（最致命，一出现 Bing 就跑偏）
+            "天气预报情况", "今天", "明天", "昨天", "现在", "目前", "实时", "最新",
+            "近日", "未来", "今晚", "明早", "这周", "下周", "本周", "今日", "明日", "最近",
+            // 口语/疑问/冗余
+            "怎么样", "可不可以", "能不能", "多少度", "几度", "告诉我", "说一下",
+            "了解一下", "查一下", "搜一下", "查一查", "如何", "什么", "多少", "情况",
+            "查询", "搜索", "查查", "看看", "了解", "知道", "麻烦", "请问", "帮我",
+            "是否", "一下", "吗", "呢", "啊", "吧", "呀", "嘛", "请", "能", "要", "想",
+            "可以", "的", "了", "是"
+        )
+        for (f in fillers) s = s.replace(f, "")
+        // 压缩空白、去掉首尾标点
+        s = s.replace(Regex("\\s+"), " ").trim(' ', '，', '。', '？', '！', '、', ',', '.', '?', '!', '：', ':')
+        return s.ifBlank { raw.trim() }
     }
 
     /** 去掉 HTML 标签、反转义常见实体 */

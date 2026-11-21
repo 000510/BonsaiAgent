@@ -53,7 +53,7 @@ const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，�
 查时间[ACTION:time]、电量[ACTION:battery]、开应用[ACTION:openapp]应用名、打电话[ACTION:dialer]号码、开相机[ACTION:camera]、开相册[ACTION:gallery]、开设置[ACTION:settings]、开浏览器[ACTION:browser]网址、复制[ACTION:copy]文字、朗读[ACTION:speak]文字、分享[ACTION:share]文字。
 需要联网查最新或你不确定的信息（新闻、天气实况、股价、某个词/人物/事件是什么），写[ACTION:search]关键词。
 搜索只在真的需要外部信息时才用：你自己知道答案的常识问题、闲聊、写东西，一律直接回答，不要搜。
-关键词只写要查的核心词，不要写整句话。例如用户问明天天气，写[ACTION:search]明天天气 城市名。
+关键词只写核心实体和主题，绝不写"今天/明天/多少度/怎么样/几点/日期"这类词——写了搜索结果会跑偏成历史和百科。例如问明天天气，写[ACTION:search]南京天气 或 [ACTION:search]南京天气预报，不要写"南京明天天气怎么样"。
 普通问题直接用中文简短回答。"""
 
 class SettingsStore(context: Context) {
