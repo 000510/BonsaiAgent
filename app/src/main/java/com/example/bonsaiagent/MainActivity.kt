@@ -12,6 +12,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.shape.CircleShape
@@ -29,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -169,7 +171,8 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                         if (imeVisible) {
                             if (dx > 100f) focusManager.clearFocus()
                         } else {
-                            val target = if (drawerOffset.value > drawerWidthPx / 2) drawerWidthPx else 0f
+                            // v10.101：灵敏度提升 —— 划过 30% 就展开（原 50% 需划过半屏才展开）
+                            val target = if (drawerOffset.value > drawerWidthPx * 0.3f) drawerWidthPx else 0f
                             scope.launch { drawerOffset.animateTo(target) }
                         }
                     }
@@ -222,7 +225,18 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
             Modifier
                 .fillMaxSize()
                 .offset { IntOffset(drawerOffset.value.toInt(), 0) }
+                // v10.101：抽屉打开时主页面轻微缩小（DeepSeek 式立体感）
+                .graphicsLayer {
+                    val p = if (drawerWidthPx > 0f) drawerOffset.value / drawerWidthPx else 0f
+                    val s = 1f - 0.04f * p
+                    scaleX = s; scaleY = s
+                }
                 .shadow(16.dp, RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp), clip = false)
+                // v10.101：抽屉打开时点主页面任意处收回（indication=null 无水波）
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { if (drawerOffset.value > 10f) closeDrawer() }
         ) {
             Scaffold(
                 topBar = {
