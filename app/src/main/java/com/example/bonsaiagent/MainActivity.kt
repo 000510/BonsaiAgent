@@ -185,45 +185,56 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                 }
             )
     ) {
-        // ---- 抽屉层（底层）：关闭时整体移到屏幕左侧外 ----
-        ModalDrawerSheet(
-            modifier = Modifier
+        // ---- 抽屉层（最底层）：关闭时整体移到屏幕左侧外 ----
+        Box(
+            Modifier
                 .width(drawerWidth)
                 .fillMaxHeight()
-                .offset { IntOffset((drawerOffset.value - drawerWidthPx).toInt(), 0) },
-            drawerContainerColor = Color.White,
-            drawerTonalElevation = 12.dp
+                .offset { IntOffset((drawerOffset.value - drawerWidthPx).toInt(), 0) }
         ) {
-            // v10.99：设置 / 切换智能体 —— 图标水平排布、小巧
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ModalDrawerSheet(
+                modifier = Modifier.fillMaxSize(),
+                // v10.103: 侧栏近白 #FAFAFA（DeepSeek 侧栏色），去 tonal tint 消除浅紫
+                drawerContainerColor = Color(0xFFFAFAFA),
+                drawerTonalElevation = 0.dp
             ) {
-                DrawerIconButton(Icons.Filled.Build, "切换智能体") {
-                    closeDrawer()
-                    showAgentView = true
+                // v10.99：设置 / 切换智能体 —— 图标水平排布、小巧
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    DrawerIconButton(Icons.Filled.Build, "切换智能体") {
+                        closeDrawer()
+                        showAgentView = true
+                    }
+                    DrawerIconButton(Icons.Filled.Settings, "设置") {
+                        closeDrawer()
+                        showSettings = true
+                    }
                 }
-                DrawerIconButton(Icons.Filled.Settings, "设置") {
-                    closeDrawer()
-                    showSettings = true
-                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "历史对话",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
+                Text(
+                    "会话历史记录即将上线，先从这里滑入切换场景",
+                    fontSize = 12.sp,
+                    color = Color(0xFF9CA3AF),
+                    modifier = Modifier.padding(horizontal = 20.dp)
+                )
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = Color(0xFFF0F0F2))
+                LazyColumnPlaceholder()
             }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "历史对话",
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            // v10.103: 抽屉打开过程由深(30%)变浅(0)，完全打开后遮罩消失
+            Box(
+                Modifier.fillMaxSize().background(
+                    Color.Black.copy(alpha = 0.3f * (1f - (if (drawerWidthPx > 0f) drawerOffset.value / drawerWidthPx else 0f)))
+                )
             )
-            Text(
-                "会话历史记录即将上线，先从这里滑入切换场景",
-                fontSize = 12.sp,
-                color = Color(0xFF9CA3AF),
-                modifier = Modifier.padding(horizontal = 20.dp)
-            )
-            Spacer(Modifier.height(12.dp))
-            HorizontalDivider(color = Color(0xFFF0F0F2))
-            LazyColumnPlaceholder()
         }
 
         // ---- 主内容层（上层）：向右推出，左边缘投影 ----
@@ -236,6 +247,8 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                     val p = if (drawerWidthPx > 0f) drawerOffset.value / drawerWidthPx else 0f
                     val s = 1f - 0.04f * p
                     scaleX = s; scaleY = s
+                    // v10.103: 主页面全色 -> 80% 透明，透出底层抽屉、分清主次
+                    alpha = 1f - 0.2f * p
                 }
                 .shadow(16.dp, RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp), clip = false)
                 // v10.101：抽屉打开时点主页面任意处收回（indication=null 无水波）
