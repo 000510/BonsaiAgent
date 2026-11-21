@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -249,13 +250,25 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                     val s = 1f - 0.04f * p
                     scaleX = s; scaleY = s
                 }
-                .shadow(16.dp, RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp), clip = false)
                 // v10.101：抽屉打开时点主页面任意处收回（indication=null 无水波）
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) { if (drawerOffset.value > 10f) closeDrawer() }
         ) {
+            // v10.106: 一条干净的窄渐变阴影，露在主页面左边缘外侧向左渐隐（替代模糊shadow的多圈脏色带）
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .width(14.dp)
+                    .align(Alignment.CenterStart)
+                    .offset(x = (-14).dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(Color(0x00000000), Color(0x2E000000))
+                        )
+                    )
+            )
             Scaffold(
                 // v10.105: 80%透明只作用于内容层(透出底层抽屉、分清主次),阴影在外层不受影响
                 modifier = Modifier.graphicsLayer {
