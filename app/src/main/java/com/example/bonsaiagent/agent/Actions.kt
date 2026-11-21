@@ -211,18 +211,8 @@ object Actions {
                                 } else {
                                     val turnOn = !flashlightOn
                                     cm.setTorchMode(camId, turnOn)
-                                    // 读回真实状态确认（API 30+），避免"假成功"
-                                    val actuallyOn = try {
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R)
-                                            cm.getTorchMode(camId) else turnOn
-                                    } catch (_: Throwable) { turnOn }
-                                    flashlightOn = actuallyOn
-                                    if (actuallyOn == turnOn) {
-                                        if (turnOn) "已打开手电筒 ✅" else "已关闭手电筒。"
-                                    } else {
-                                        "[手电筒失败] 系统未响应，可能被其他相机App占用。关掉相机类App再试。" +
-                                            if (turnOn) "（当前实际：${if (actuallyOn) "亮" else "灭"}）" else ""
-                                    }
+                                    flashlightOn = turnOn
+                                    if (turnOn) "已打开手电筒 ✅" else "已关闭手电筒。"
                                 }
                             } catch (e: Throwable) {
                                 "[手电筒失败] ${e.javaClass.simpleName}: ${e.message}"
