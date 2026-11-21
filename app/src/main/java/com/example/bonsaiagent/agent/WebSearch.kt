@@ -52,8 +52,15 @@ object WebSearch {
      * 返回可直接展示的文本，不走模型总结 —— 模型只会编"无法提供未来天气"。
      */
     fun weather(city: String?): String {
-        val path = if (!city.isNullOrBlank()) "/" + URLEncoder.encode(city, "UTF-8") else "/"
-        val url = "https://wttr.in$path?format=%l:+%c+%t+%C+湿度%h+风%w&lang=zh"
+        // v10.124【修复】format 必须做完整 URL 编码，否则 OkHttp 会把 %l/%t 等占位符重编码成
+        //   %25l，wttr.in 解析 format 失败 → 回退返回整页 HTML（"输出001"笔记实测）。
+        //   编码后用竖线分隔 + 中文标签，wttr.in decode 后完全还原（实测 `南京 | ✨ | +10°C | ...`）。
+        //   另：无城市时默认南京（用户常驻城市）——wttr.in IP 定位实测会跑到郑州，对"明天天气咋样"这类
+        //   无城市查询给出错误城市，默认常驻城市更符合预期。
+        val c = if (city.isNullOrBlank()) "南京" else city
+        val path = "/" + URLEncoder.encode(c, "UTF-8")
+        val encFmt = URLEncoder.encode("%l | %c | %t | %C | 湿度%h | 风%w", "UTF-8").replace("+", "%20")
+        val url = "https://wttr.in$path?format=$encFmt&lang=zh"
         return try {
             val req = Request.Builder().url(url).header("User-Agent", UA).build()
             client.newCall(req).execute().use { resp ->
