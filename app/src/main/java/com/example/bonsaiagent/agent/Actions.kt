@@ -164,10 +164,11 @@ object Actions {
                 "speak", "tts" -> {
                     val text = arg?.trim().orEmpty()
                     if (text.isEmpty()) return "[朗读失败] 没说要读什么"
-                    val tts = android.speech.tts.TextToSpeech(ctx) { status ->
+                    val ttsRef = arrayOfNulls<android.speech.tts.TextToSpeech>(1)
+                    ttsRef[0] = android.speech.tts.TextToSpeech(ctx) { status ->
                         if (status == android.speech.tts.TextToSpeech.SUCCESS) {
                             @Suppress("DEPRECATION")
-                            tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null)
+                            ttsRef[0]?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null)
                         }
                     }
                     "已开始朗读：${text.take(30)}${if (text.length > 30) "…" else ""}"
