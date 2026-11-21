@@ -43,6 +43,16 @@ object WebSearch {
 
     fun isWeather(msg: String): Boolean = WEATHER_REGEX.containsMatchIn(msg)
 
+    // v10.126【修复】信息检索类意图：4B 对"华为手机最新机型是哪个/搜一下/搜索XX"这类词不稳定
+    //   产出 search 动作，导致不触发 WebSearch → 凭训练知识答（Mate 60 过时/"我无法联网"/
+    //   Mate 90 幻觉，实测截图）。这里做确定性判断：命中检索关键词就直接强制搜索，
+    //   不再等模型输出 search 指令。
+    private val SEARCH_INTENT = Regex(
+        "搜一下|搜索|查一下|帮我查|查查|哪款|哪部|什么型号|什么手机|哪个型号|多少钱|价格多少|" +
+        "推荐|对比|评测|有什么区别|参数|配置|最新.{0,6}(机型|手机|型号|款|产品)|上市|发布"
+    )
+    fun shouldSearch(msg: String): Boolean = SEARCH_INTENT.containsMatchIn(msg)
+
     /** 从用户原话提取城市实体；没有则返回 null（走 IP 定位） */
     fun cityOf(msg: String): String? = CITY_LIST.firstOrNull { msg.contains(it) }
 

@@ -1823,6 +1823,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // 拿它去解析永远得到"直接回答"，动作全部不执行（血泪教训）。
             val finalText = extractAnswer(raw.toString()).first
             val allActions = Router.parseActions(finalText)
+            // v10.126【修复】信息检索类意图强制搜索：4B 对"华为手机最新机型是哪个/搜一下"不稳定
+            //   产出 search 动作，不触发 WebSearch 就凭训练知识答（Mate 60 过时/"我无法联网"/
+            //   Mate 90 幻觉，截图实测）。命中 shouldSearch → 确定性搜索通道，不依赖模型路由。
+            if (WebSearch.shouldSearch(msg) && !WebSearch.isWeather(msg)) {
+                mainHandler.post { ai.content.value = "[→ 动作] search（信息检索，自动搜索）\n" }
+                searchAndSummarize(WebSearch.buildQuery(msg, null), ai)
+                return@launch
+            }
             when (val route = Router.parse(finalText)) {
                 is RouteResult.Cloud -> {
                     mainHandler.post { ai.content.value += "\n\n[→ 已路由云端] ${route.description}\n" }
