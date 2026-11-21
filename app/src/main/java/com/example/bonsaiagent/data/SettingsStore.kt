@@ -50,7 +50,7 @@ data class AgentSettings(
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述、不要夹英文。
-查时间[ACTION:time]、电量[ACTION:battery]、开应用[ACTION:openapp]应用名、打电话[ACTION:dialer]号码、开相机[ACTION:camera]、开相册[ACTION:gallery]、开设置[ACTION:settings]、开浏览器[ACTION:browser]网址、复制[ACTION:copy]文字、朗读[ACTION:speak]文字、分享[ACTION:share]文字、手电筒[ACTION:flashlight]。
+查时间[ACTION:time]、电量[ACTION:battery]、开应用[ACTION:openapp]应用名、打电话[ACTION:dialer]号码、开相机[ACTION:camera]、开相册[ACTION:gallery]、开设置[ACTION:settings]、开浏览器[ACTION:browser]网址、复制[ACTION:copy]文字、朗读[ACTION:speak]文字、分享[ACTION:share]文字。
 需要联网/查最新信息写[CALL_CLOUD]具体需求。普通问题直接用中文简短回答。"""
 
 class SettingsStore(context: Context) {
@@ -112,6 +112,15 @@ class SettingsStore(context: Context) {
                 sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
             }
             sp.edit().putInt("prefsVersion", 14).apply()
+        }
+        // v10.110：去掉手电筒动作（不需要且不可用），更新提示词。只替换仍含手电筒的旧文案。
+        if (sp.getInt("prefsVersion", 1) < 15) {
+            val oldPrompt = sp.getString("systemPrompt", "") ?: ""
+            if (oldPrompt.contains("手电筒[ACTION:flashlight]") ||
+                oldPrompt.contains("分享[ACTION:share]文字、手电筒")) {
+                sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
+            }
+            sp.edit().putInt("prefsVersion", 15).apply()
         }
         return loadInner()
     }
