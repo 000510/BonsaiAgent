@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import java.text.SimpleDateFormat
@@ -151,9 +153,22 @@ object Actions {
                 "copy", "clipboard" -> {
                     val text = arg?.trim().orEmpty()
                     if (text.isEmpty()) return "[复制失败] 没说要复制什么"
-                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("BonsaiAgent", text))
-                    "已复制：${text.take(40)}${if (text.length > 40) "…" else ""}"
+                    // v10.113：剪贴板必须在主线程操作，否则后台线程调用会静默失败(假成功)。
+                    // 写完后读回验证，确认真的复制进去了才报成功。
+                    val done = java.util.concurrent.CountDownLatch(1)
+                    val result = arrayOf(false)
+                    Handler(Looper.getMainLooper()).post {
+                        try {
+                            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("BonsaiAgent", text))
+                            val readBack = cm.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
+                            result[0] = readBack == text
+                        } catch (_: Throwable) { result[0] = false }
+                        finally { done.countDown() }
+                    }
+                    done.await(2, java.util.concurrent.TimeUnit.SECONDS)
+                    if (result[0]) "已复制：${text.take(40)}${if (text.length > 40) "…" else ""}"
+                    else "[复制失败] 系统未写入剪贴板，请重试"
                 }
 
                 // v10.108：朗读文本（TTS，系统自带，不占模型内存）
@@ -174,12 +189,18 @@ object Actions {
                 "share" -> {
                     val text = arg?.trim().orEmpty()
                     if (text.isEmpty()) return "[分享失败] 没说要分享什么"
-                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(android.content.Intent.EXTRA_TEXT, text)
-                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    // v10.113：startActivity 切主线程，避免后台线程调用被系统拒绝
+                    Handler(Looper.getMainLooper()).post {
+                        try {
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, text)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            ctx.startActivity(Intent.createChooser(intent, "分享到")
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        } catch (_: Throwable) {}
                     }
-                    ctx.startActivity(android.content.Intent.createChooser(intent, "分享到"))
                     "已打开分享面板"
                 }
 
