@@ -1,6 +1,7 @@
 package com.example.bonsaiagent.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -19,8 +20,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -34,21 +37,43 @@ import com.example.bonsaiagent.MainViewModel
 fun ChatScreen(vm: MainViewModel) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val focusManager = LocalFocusManager.current
+    // v10.99：键盘弹出时，右滑收回输入法（而不是打开历史抽屉）
+    val imeVisible = WindowInsets.isImeVisible
 
     Box(Modifier.fillMaxSize()) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+    // v10.99：消息区固定不动，不随键盘上移；键盘弹出时右滑收输入法
+    Box(
+        Modifier
+            .fillMaxSize()
+            .pointerInput(imeVisible) {
+                if (imeVisible) {
+                    var dx = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { dx = 0f },
+                        onHorizontalDrag = { _, dragAmount -> dx += dragAmount },
+                        onDragEnd = { if (dx > 100f) focusManager.clearFocus() }
+                    )
+                }
+            }
+    ) {
         if (vm.chatMessages.isEmpty()) {
             // v10.98：克制版空状态 —— 中央一个品牌图形 + 一句小字，不堆卡片
-            EmptyHint(Modifier.weight(1f).fillMaxWidth())
+            EmptyHint(Modifier.fillMaxSize())
         } else {
             LazyColumn(
-                Modifier.weight(1f).fillMaxWidth(),
+                Modifier.fillMaxSize(),
                 state = listState,
+                contentPadding = PaddingValues(top = 4.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(vm.chatMessages, key = { it.id }) { msg -> Bubble(msg) }
             }
         }
+    }
+
+    // v10.99：输入区 —— overlay 贴底，imePadding 随键盘上移，页面其余不动
+    Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
         // v10.87：检测到可记忆的信息时，从输入框上方滑出确认条
         vm.pendingFact.value?.let { f ->
             MemoryPromptCard(
@@ -58,11 +83,15 @@ fun ChatScreen(vm: MainViewModel) {
                 onClose = { vm.dismissPending() }
             )
         }
-        // v10.98：输入框 —— 压扁半透明胶囊，发送钮悬浮在内部右侧垂直居中
+        // v10.98：输入框 —— 压扁半透明胶囊，发送钮悬浮在内部右侧垂直居中；v10.99 加投影
         Surface(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
+            shadowElevation = 8.dp,
             tonalElevation = 0.dp
         ) {
             Box(

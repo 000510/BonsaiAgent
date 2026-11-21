@@ -25,7 +25,8 @@ fun RouterScreen(vm: MainViewModel) {
     val listState = rememberLazyListState()
 
     Box(Modifier.fillMaxSize()) {
-    Column(Modifier.fillMaxSize().padding(12.dp)) {
+    // v10.99：消息区固定不动，不随键盘上移（键盘弹出只推输入框）
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         // 路由说明卡片
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -43,63 +44,69 @@ fun RouterScreen(vm: MainViewModel) {
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),
             state = listState,
+            contentPadding = PaddingValues(bottom = 88.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(vm.agentMessages, key = { it.id }) { msg -> Bubble(msg) }
         }
+    }
 
-        // v10.94：输入框仿 DeepSeek —— 圆角卡片、内嵌圆形发送键
-        Surface(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant
+    // v10.99：输入框 overlay 贴底 + imePadding，键盘弹出只推输入框；加投影
+    Surface(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .imePadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shadowElevation = 8.dp
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.Bottom
         ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.Bottom
+            TextField(
+                value = input,
+                onValueChange = { input = it },
+                placeholder = { Text("交给 Agent 处理…") },
+                modifier = Modifier.weight(1f),
+                maxLines = 5,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent
+                )
+            )
+            val canSend = input.isNotBlank()
+            IconButton(
+                onClick = {
+                    if (canSend) {
+                        vm.sendAgent(input)
+                        input = ""
+                    }
+                },
+                modifier = Modifier
+                    .size(44.dp)
+                    .padding(bottom = 2.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (canSend) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outlineVariant
+                    ),
+                enabled = canSend
             ) {
-                TextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    placeholder = { Text("交给 Agent 处理…") },
-                    modifier = Modifier.weight(1f),
-                    maxLines = 5,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent
+                Text(
+                    "↑",
+                    color = if (canSend) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontSize = 22.sp, fontWeight = FontWeight.Medium
                     )
                 )
-                val canSend = input.isNotBlank()
-                IconButton(
-                    onClick = {
-                        if (canSend) {
-                            vm.sendAgent(input)
-                            input = ""
-                        }
-                    },
-                    modifier = Modifier
-                        .size(44.dp)
-                        .padding(bottom = 2.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (canSend) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outlineVariant
-                        ),
-                    enabled = canSend
-                ) {
-                    Text(
-                        "↑",
-                        color = if (canSend) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 22.sp, fontWeight = FontWeight.Medium
-                        )
-                    )
-                }
             }
         }
     }

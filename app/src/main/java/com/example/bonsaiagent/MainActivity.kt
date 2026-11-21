@@ -124,23 +124,38 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     // v10.98：设置 / Agent 切换入口挪到抽屉顶部
     var showSettings by remember { mutableStateOf(false) }
-    var showRouter by remember { mutableStateOf(false) }
+    // v10.99：Agent 输入页内嵌到主界面（不再是全屏弹层）
+    var showAgentView by remember { mutableStateOf(false) }
+    // v10.99：键盘弹出时禁用抽屉手势（输入时右滑改成收输入法）
+    val imeVisible = WindowInsets.isImeVisible
     // v10.98：抽屉加宽，主页被推到只露右侧一小条（约 72dp）
     val drawerWidth = (LocalConfiguration.current.screenWidthDp - 72).dp
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        // v10.99：键盘弹出时禁用手势，避免输入时右滑误开历史栏
+        gesturesEnabled = !imeVisible,
+        // v10.99：轻微阴影光效（主页被推右时边缘投影 + 淡化遮罩）
+        scrimColor = Color(0x22000000),
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.width(drawerWidth),
-                drawerContainerColor = Color.White
+                drawerContainerColor = Color.White,
+                drawerElevation = 12.dp
             ) {
-                // v10.98：抽屉上侧 —— 切换智能体 + 设置
-                DrawerEntry(Icons.Filled.Build, "切换智能体") {
-                    showRouter = true
-                }
-                DrawerEntry(Icons.Filled.Settings, "设置") {
-                    showSettings = true
+                // v10.99：设置 / 切换智能体 —— 图标水平排布、小巧
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    DrawerIconButton(Icons.Filled.Build, "切换智能体") {
+                        scope.launch { drawerState.close() }
+                        showAgentView = true
+                    }
+                    DrawerIconButton(Icons.Filled.Settings, "设置") {
+                        scope.launch { drawerState.close() }
+                        showSettings = true
+                    }
                 }
                 Spacer(Modifier.height(10.dp))
                 Text(
@@ -166,12 +181,20 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                 TopAppBar(
                     // v10.98：左上两条杠（打开历史抽屉）
                     navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            TwoBarsIcon()
+                        if (showAgentView) {
+                            // v10.99：Agent 页左上返回对话
+                            IconButton(onClick = { showAgentView = false }) {
+                                Text("←", fontSize = 22.sp, color = Color(0xFF111111))
+                            }
+                        } else {
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                TwoBarsIcon()
+                            }
                         }
                     },
                     title = {},
                     actions = {
+                        if (!showAgentView) {
                         // v10.98：新对话 —— 对话框图标，右上角小加号
                         IconButton(onClick = { vm.newSession() }) {
                             Box(Modifier.size(24.dp)) {
@@ -196,6 +219,7 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                                 }
                             }
                         }
+                        }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = Color.White,
@@ -206,7 +230,8 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
             bottomBar = {}
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
-                ChatScreen(vm)
+                // v10.99：切换智能体内嵌主界面，不再是全屏弹层
+                if (showAgentView) RouterScreen(vm) else ChatScreen(vm)
             }
         }
     }
@@ -235,44 +260,13 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
         }
     }
 
-    // v10.97：Agent 切换全屏弹层
-    if (showRouter) {
-        Dialog(
-            onDismissRequest = { showRouter = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Column(Modifier.fillMaxSize().background(Color.White)) {
-                TopAppBar(
-                    title = { Text("切换智能体", fontWeight = FontWeight.Bold) },
-                    navigationIcon = {
-                        IconButton(onClick = { showRouter = false }) {
-                            Icon(Icons.Filled.Add, contentDescription = "关闭",
-                                modifier = Modifier.rotate(45f))
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
-                )
-                Box(Modifier.fillMaxSize()) {
-                    RouterScreen(vm)
-                }
-            }
-        }
-    }
 }
 
-// v10.98：抽屉顶部入口（图标 + 文字行，点击触发）
+// v10.99：抽屉顶部图标按钮（设置 / 切换智能体），小巧、水平排布
 @Composable
-private fun DrawerEntry(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+private fun DrawerIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(38.dp)) {
         Icon(icon, contentDescription = label, tint = Color(0xFF111111), modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(12.dp))
-        Text(label, fontSize = 15.sp, color = Color(0xFF111111))
     }
 }
 
