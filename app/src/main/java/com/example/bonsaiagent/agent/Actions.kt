@@ -151,24 +151,15 @@ object Actions {
 
                 // v10.108：复制文本到剪贴板
                 "copy", "clipboard" -> {
-                    val text = arg?.trim().orEmpty()
+                    var text = arg?.trim().orEmpty()
+                    // v10.114：回退到 v10.108 的简单实现(实测那版复制是真成功的)。
+                    // 只剥掉开头的"复制/拷贝/帮我复制"等触发词，避免把整句"复制你好世界"都复制进去。
+                    text = text.replace(Regex("^(请)?(帮我)?(复制|拷贝|复制一下|拷贝一下|复制这段|复制下面)[:：\\s]*"), "")
+                        .trim()
                     if (text.isEmpty()) return "[复制失败] 没说要复制什么"
-                    // v10.113：剪贴板必须在主线程操作，否则后台线程调用会静默失败(假成功)。
-                    // 写完后读回验证，确认真的复制进去了才报成功。
-                    val done = java.util.concurrent.CountDownLatch(1)
-                    val result = arrayOf(false)
-                    Handler(Looper.getMainLooper()).post {
-                        try {
-                            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                            cm.setPrimaryClip(android.content.ClipData.newPlainText("BonsaiAgent", text))
-                            val readBack = cm.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
-                            result[0] = readBack == text
-                        } catch (_: Throwable) { result[0] = false }
-                        finally { done.countDown() }
-                    }
-                    done.await(2, java.util.concurrent.TimeUnit.SECONDS)
-                    if (result[0]) "已复制：${text.take(40)}${if (text.length > 40) "…" else ""}"
-                    else "[复制失败] 系统未写入剪贴板，请重试"
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("BonsaiAgent", text))
+                    "已复制：${text.take(40)}${if (text.length > 40) "…" else ""}"
                 }
 
                 // v10.108：朗读文本（TTS，系统自带，不占模型内存）
