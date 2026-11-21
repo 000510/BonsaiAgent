@@ -49,9 +49,9 @@ data class AgentSettings(
     val lastModelPath: String = ""
 )
 
-const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述。
-开App写[ACTION:openapp]名字。时间写[ACTION:time]。电量写[ACTION:battery]。
-联网或复杂写[CALL_CLOUD]需求。其他问题直接用中文回答，不要夹英文单词。"""
+const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述、不要夹英文。
+查时间[ACTION:time]、电量[ACTION:battery]、开应用[ACTION:openapp]应用名、打电话[ACTION:dialer]号码、开相机[ACTION:camera]、开相册[ACTION:gallery]、开设置[ACTION:settings]、开浏览器[ACTION:browser]网址、复制[ACTION:copy]文字、朗读[ACTION:speak]文字、分享[ACTION:share]文字、手电筒[ACTION:flashlight]。
+需要联网/查最新信息写[CALL_CLOUD]具体需求。普通问题直接用中文简短回答。"""
 
 class SettingsStore(context: Context) {
     private val sp: SharedPreferences =
@@ -102,6 +102,16 @@ class SettingsStore(context: Context) {
         // 完整的前向输出层。手机上 γ=2~3 才是甜点。
         if (sp.getInt("prefsVersion", 1) < 13) {
             sp.edit().putInt("draftMax", 3).putInt("prefsVersion", 13).apply()
+        }
+        // v10.108：升级系统提示词（加新动作说明）。只替换仍是旧文案的用户，
+        // 自己改过提示词的保持原样。
+        if (sp.getInt("prefsVersion", 1) < 14) {
+            val oldPrompt = sp.getString("systemPrompt", "") ?: ""
+            if (oldPrompt.contains("开App写[ACTION:openapp]名字") ||
+                oldPrompt == DEFAULT_SYSTEM_PROMPT) {
+                sp.edit().putString("systemPrompt", DEFAULT_SYSTEM_PROMPT).apply()
+            }
+            sp.edit().putInt("prefsVersion", 14).apply()
         }
         return loadInner()
     }

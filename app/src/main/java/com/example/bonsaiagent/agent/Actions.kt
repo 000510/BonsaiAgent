@@ -23,6 +23,8 @@ import java.util.Locale
  * 既可靠（不存在"命令不存在"），也安全（动作白名单，没有破坏性操作）。
  */
 object Actions {
+    /** 手电筒当前是否打开（v10.108） */
+    private var flashlightOn = false
 
     /** 给 system prompt 用的动作清单 */
     val CATALOG = """
@@ -31,10 +33,15 @@ object Actions {
         gallery  → 打开相册
         camera   → 打开相机
         settings → 打开系统设置
-        dialer   → 打开拨号盘
+        dialer   → 打开拨号盘（可带号码）
         browser  → 打开浏览器（可带网址）
         wifi     → 打开 WiFi 设置
         apps     → 打开应用列表（系统设置-应用）
+        openapp  → 打开指定应用（参数=应用名，如"微信"）
+        copy     → 复制文本到剪贴板（参数=要复制的文字）
+        speak    → 朗读文本（参数=要读的文字）
+        share    → 分享文本（参数=要分享的文字）
+        flashlight → 开关手电筒
     """.trimIndent()
 
     /**
@@ -57,6 +64,10 @@ object Actions {
             n in listOf("浏览器", "网页", "上网") -> "browser"
             n in listOf("时间", "日期", "现在几点") -> "time"
             n in listOf("电量", "电池", "剩余电量") -> "battery"
+            n in listOf("复制", "拷贝", "复制到剪贴板") -> "copy"
+            n in listOf("朗读", "念出来", "读出来", "播报", "语音") -> "speak"
+            n in listOf("分享", "发送分享") -> "share"
+            n in listOf("手电筒", "手电", "闪光灯", "照明") -> "flashlight"
             else -> n
         }
     }
@@ -136,6 +147,68 @@ object Actions {
                             "[找不到应用] $who" +
                                 if (sample.isEmpty()) "（应用清单是空的，去设置页点一下「刷新应用列表」）"
                                 else "\n手机里装着的有：$sample …"
+                        }
+                    }
+                }
+
+                // v10.108：复制文本到剪贴板
+                "copy", "clipboard" -> {
+                    val text = arg?.trim().orEmpty()
+                    if (text.isEmpty()) return "[复制失败] 没说要复制什么"
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("BonsaiAgent", text))
+                    "已复制：${text.take(40)}${if (text.length > 40) "…" else ""}"
+                }
+
+                // v10.108：朗读文本（TTS，系统自带，不占模型内存）
+                "speak", "tts" -> {
+                    val text = arg?.trim().orEmpty()
+                    if (text.isEmpty()) return "[朗读失败] 没说要读什么"
+                    val tts = android.speech.tts.TextToSpeech(ctx) { status ->
+                        if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+                            @Suppress("DEPRECATION")
+                            tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null)
+                        }
+                    }
+                    "已开始朗读：${text.take(30)}${if (text.length > 30) "…" else ""}"
+                }
+
+                // v10.108：分享文本（系统分享面板）
+                "share" -> {
+                    val text = arg?.trim().orEmpty()
+                    if (text.isEmpty()) return "[分享失败] 没说要分享什么"
+                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(android.content.Intent.EXTRA_TEXT, text)
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    ctx.startActivity(android.content.Intent.createChooser(intent, "分享到"))
+                    "已打开分享面板"
+                }
+
+                // v10.108：手电筒（CameraManager，无需 CAMERA 权限）
+                "flashlight", "torch" -> {
+                    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) {
+                        "[手电筒不可用] 需要 Android 6.0 以上"
+                    } else {
+                        try {
+                            val cm = ctx.getSystemService(android.content.Context.CAMERA_SERVICE)
+                                    as android.hardware.camera2.CameraManager
+                            val camId = cm.cameraIdList.firstOrNull { id ->
+                                cm.getCameraCharacteristics(id)
+                                    .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                            }
+                            if (camId == null) {
+                                "[手电筒不可用] 这台设备没有闪光灯"
+                            } else {
+                                // 用静态标记记住开关状态
+                                val turnOn = !flashlightOn
+                                cm.setTorchMode(camId, turnOn)
+                                flashlightOn = turnOn
+                                if (turnOn) "已打开手电筒。" else "已关闭手电筒。"
+                            }
+                        } catch (e: Throwable) {
+                            "[手电筒失败] ${e.message}"
                         }
                     }
                 }
