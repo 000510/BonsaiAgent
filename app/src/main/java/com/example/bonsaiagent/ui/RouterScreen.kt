@@ -27,27 +27,16 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     Box(Modifier.fillMaxSize()) {
     // v10.99：消息区固定不动，不随键盘上移（键盘弹出只推输入框）
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
-        // v10.100：顶部小返回入口（顶栏保持主页面原样，从这里回对话）
-        TextButton(
-            onClick = onBackToChat,
-            modifier = Modifier.padding(horizontal = 4.dp),
-            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-        ) {
-            Text("← 返回对话", fontSize = 13.sp, color = Color(0xFF4B6BFB))
-        }
-        // 路由说明卡片
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-        ) {
-            Text(
-                "混合路由：简单问题本地直答；模型输出 [CALL_CLOUD] 自动调 DeepSeek；" +
-                        "输出 [EXEC: 命令] 在本机执行 shell 并回传结果。",
-                Modifier.padding(10.dp),
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
+        // v10.107：WORK 艺术字标识——证明当前是 Agent 模式（替代原返回入口/路由说明）
+        Text(
+            "W O R K",
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Black,
+            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+            color = Color(0xFF4D6BFE),
+            letterSpacing = 2.sp,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+        )
 
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),

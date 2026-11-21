@@ -145,6 +145,8 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
     var showSettings by remember { mutableStateOf(false) }
     // v10.100：Agent 输入页内嵌到主界面（顶栏保持主页面原样，内容区切换）
     var showAgentView by remember { mutableStateOf(false) }
+    // v10.107：上下文用量详情展开开关
+    var showContextDetail by remember { mutableStateOf(false) }
     // v10.99：键盘弹出时右滑改成收输入法
     val imeVisible = WindowInsets.isImeVisible
     val focusManager = LocalFocusManager.current
@@ -204,9 +206,10 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    DrawerIconButton(Icons.Filled.Build, "切换智能体") {
+                    // v10.107：扳手图标变成对话/Agent 切换开关，再点一次回到对话
+                    DrawerIconButton(Icons.Filled.Build, "切换对话/Agent") {
+                        showAgentView = !showAgentView
                         closeDrawer()
-                        showAgentView = true
                     }
                     DrawerIconButton(Icons.Filled.Settings, "设置") {
                         closeDrawer()
@@ -283,6 +286,75 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                         },
                         title = {},
                         actions = {
+                            // v10.107：加载模型按钮——点击 loading 动画，完成显示"已加载"
+                            val loading = vm.genStatus.value.phase == "加载中"
+                            val loaded = vm.modelLoaded.value
+                            TextButton(
+                                onClick = { if (!loading && !loaded) vm.loadModel() },
+                                enabled = !loading && !loaded,
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                            ) {
+                                if (loading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp), strokeWidth = 2.dp,
+                                        color = Color(0xFF4D6BFE)
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("加载中", fontSize = 12.sp, color = Color(0xFF4D6BFE))
+                                } else {
+                                    Text(
+                                        if (loaded) "已加载" else "加载模型",
+                                        fontSize = 12.sp,
+                                        color = if (loaded) Color(0xFF16A34A) else Color(0xFF4D6BFE)
+                                    )
+                                }
+                            }
+                            // v10.107：上下文已用多少的圆环，点击展开查看
+                            val ctxMax = vm.settings.value.contextSize.coerceAtLeast(1)
+                            val histChars = vm.chatMessages.sumOf { it.content.value.length + it.promptText.length } +
+                                    vm.agentMessages.sumOf { it.content.value.length }
+                            val estTokens = (histChars / 1.5f).toInt() + vm.genStatus.value.tokens
+                            val ctxFrac = (estTokens.toFloat() / ctxMax).coerceIn(0f, 1f)
+                            Box {
+                                IconButton(onClick = { showContextDetail = !showContextDetail }) {
+                                    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(
+                                            progress = ctxFrac,
+                                            modifier = Modifier.size(24.dp),
+                                            color = if (ctxFrac > 0.85f) Color(0xFFEA580C) else Color(0xFF4D6BFE),
+                                            trackColor = Color(0xFFE5E7EB), strokeWidth = 3.dp
+                                        )
+                                        Text(
+                                            "${(ctxFrac * 100).toInt()}",
+                                            fontSize = 9.sp, color = Color(0xFF111111)
+                                        )
+                                    }
+                                }
+                                if (showContextDetail) {
+                                    androidx.compose.ui.window.Popup(
+                                        onDismissRequest = { showContextDetail = false },
+                                        alignment = Alignment.TopEnd
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = Color.White,
+                                            shadowElevation = 8.dp,
+                                            modifier = Modifier.padding(top = 4.dp, end = 8.dp)
+                                        ) {
+                                            Column(Modifier.padding(12.dp).width(200.dp)) {
+                                                Text("上下文用量", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                Spacer(Modifier.height(6.dp))
+                                                Text("已用约 $estTokens / $ctxMax token", fontSize = 12.sp)
+                                                Text("占比 ${(ctxFrac * 100).toInt()}%", fontSize = 12.sp, color = Color(0xFF4D6BFE))
+                                                Spacer(Modifier.height(4.dp))
+                                                Text("历史 ${vm.chatMessages.size} 条 · Agent ${vm.agentMessages.size} 条",
+                                                    fontSize = 11.sp, color = Color(0xFF6B7280))
+                                                Text("（token 为字符数估算值）", fontSize = 10.sp, color = Color(0xFF9CA3AF))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             IconButton(onClick = { vm.newSession(); showAgentView = false }) {
                                 Box(Modifier.size(24.dp)) {
                                     Icon(
