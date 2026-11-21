@@ -1827,8 +1827,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             //   产出 search 动作，不触发 WebSearch 就凭训练知识答（Mate 60 过时/"我无法联网"/
             //   Mate 90 幻觉，截图实测）。命中 shouldSearch → 确定性搜索通道，不依赖模型路由。
             if (WebSearch.shouldSearch(msg) && !WebSearch.isWeather(msg)) {
+                val prev = chatMessages.lastOrNull { it.role == "user" && it.content.value != msg }?.content?.value
                 mainHandler.post { ai.content.value = "[→ 动作] search（信息检索，自动搜索）\n" }
-                searchAndSummarize(WebSearch.buildQuery(msg, null), ai)
+                searchAndSummarize(WebSearch.withContext(WebSearch.buildQuery(msg, null), prev), ai)
                 return@launch
             }
             when (val route = Router.parse(finalText)) {
@@ -1861,7 +1862,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                                     mainHandler.post { ai.content.value = txt }
                                 }
                             } else {
-                                searchAndSummarize(WebSearch.buildQuery(msg, act.arg!!.trim()), ai)
+                                val prev = chatMessages.lastOrNull { it.role == "user" && it.content.value != msg }?.content?.value
+                                searchAndSummarize(WebSearch.withContext(WebSearch.buildQuery(msg, act.arg!!.trim()), prev), ai)
                             }
                             return@launch
                         }
