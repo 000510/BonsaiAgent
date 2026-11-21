@@ -1524,6 +1524,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var lastUiAt = 0L
             // 推理要用大栈线程：llama.cpp 的计算在调用线程栈上跑，默认 1MB 容易溢出
             val worker = Thread(null, Runnable {
+                // v10.111：推理线程提到最高调度优先级(-19)，让系统在后台抢资源时优先喂它
+                try { android.os.Process.setThreadPriority(-19) } catch (_: Throwable) {}
                 Llama.generate(sysPrefix, prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, s.maxTokens) {
                     buf.append(it)
                     tokCount++
@@ -1672,6 +1674,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // 5 tok/s × 几百个 token 就是几十秒的纯浪费。
             val routeMaxTok = minOf(s.maxTokens, 128)
             val worker = Thread(null, Runnable {
+                // v10.111：推理线程提到最高调度优先级(-19)，让系统在后台抢资源时优先喂它
+                try { android.os.Process.setThreadPriority(-19) } catch (_: Throwable) {}
                 Llama.generate(sysPrefix, prompt, s.temperature, s.topK, s.topP, s.repeatPenalty, routeMaxTok) {
                     raw.append(it)
                     tokCount++
