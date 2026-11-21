@@ -1,7 +1,6 @@
 package com.example.bonsaiagent.ui
 
 import android.widget.Toast
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -21,10 +20,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -39,26 +36,10 @@ import com.example.bonsaiagent.MainViewModel
 fun ChatScreen(vm: MainViewModel) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
-    val focusManager = LocalFocusManager.current
-    // v10.99：键盘弹出时，右滑收回输入法（而不是打开历史抽屉）
-    val imeVisible = WindowInsets.isImeVisible
 
     Box(Modifier.fillMaxSize()) {
     // v10.99：消息区固定不动，不随键盘上移；键盘弹出时右滑收输入法
-    Box(
-        Modifier
-            .fillMaxSize()
-            .pointerInput(imeVisible) {
-                if (imeVisible) {
-                    var dx = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = { dx = 0f },
-                        onHorizontalDrag = { _, dragAmount -> dx += dragAmount },
-                        onDragEnd = { if (dx > 100f) focusManager.clearFocus() }
-                    )
-                }
-            }
-    ) {
+    Box(Modifier.fillMaxSize()) {
         if (vm.chatMessages.isEmpty()) {
             // v10.98：克制版空状态 —— 中央一个品牌图形 + 一句小字，不堆卡片
             EmptyHint(Modifier.fillMaxSize())

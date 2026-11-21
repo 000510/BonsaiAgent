@@ -20,13 +20,21 @@ import com.example.bonsaiagent.ChatMessage
 import com.example.bonsaiagent.MainViewModel
 
 @Composable
-fun RouterScreen(vm: MainViewModel) {
+fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
     Box(Modifier.fillMaxSize()) {
     // v10.99：消息区固定不动，不随键盘上移（键盘弹出只推输入框）
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        // v10.100：顶部小返回入口（顶栏保持主页面原样，从这里回对话）
+        TextButton(
+            onClick = onBackToChat,
+            modifier = Modifier.padding(horizontal = 4.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+        ) {
+            Text("← 返回对话", fontSize = 13.sp, color = Color(0xFF4B6BFB))
+        }
         // 路由说明卡片
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,

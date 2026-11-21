@@ -3,11 +3,15 @@ package com.example.bonsaiagent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.shape.CircleShape
@@ -23,11 +27,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -55,6 +64,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashCatcher.mark(applicationContext, "1 onCreate 开始")
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+        )
         CrashCatcher.install(applicationContext)
         CrashCatcher.mark(applicationContext, "2 崩溃捕获已安装")
 
@@ -122,122 +135,144 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
     LaunchedEffect(Unit) { CrashCatcher.mark(ctx, "6 首帧已渲染") }
     val scope = rememberCoroutineScope()
 
-    // v10.98：历史会话抽屉（左滑 / 点两条杠打开），数据层后续补
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    // v10.98：设置 / Agent 切换入口挪到抽屉顶部
+    // v10.100：自定义抽屉 —— 主页面向右推出（非覆盖式），键盘弹出时右滑收输入法
     var showSettings by remember { mutableStateOf(false) }
-    // v10.99：Agent 输入页内嵌到主界面（不再是全屏弹层）
+    // v10.100：Agent 输入页内嵌到主界面（顶栏保持主页面原样，内容区切换）
     var showAgentView by remember { mutableStateOf(false) }
-    // v10.99：键盘弹出时禁用抽屉手势（输入时右滑改成收输入法）
+    // v10.99：键盘弹出时右滑改成收输入法
     val imeVisible = WindowInsets.isImeVisible
+    val focusManager = LocalFocusManager.current
     // v10.98：抽屉加宽，主页被推到只露右侧一小条（约 72dp）
     val drawerWidth = (LocalConfiguration.current.screenWidthDp - 72).dp
+    val drawerWidthPx = with(LocalDensity.current) { drawerWidth.toPx() }
+    // v10.100：抽屉滑动偏移，0=关 / drawerWidthPx=开
+    val drawerOffset = remember { Animatable(0f) }
+    fun openDrawer() { scope.launch { drawerOffset.animateTo(drawerWidthPx) } }
+    fun closeDrawer() { scope.launch { drawerOffset.animateTo(0f) } }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        // v10.99：键盘弹出时禁用手势，避免输入时右滑误开历史栏
-        gesturesEnabled = !imeVisible,
-        // v10.99：轻微阴影光效（主页被推右时边缘投影 + 淡化遮罩）
-        scrimColor = Color(0x22000000),
-        drawerContent = {
-            ModalDrawerSheet(
-                modifier = Modifier.width(drawerWidth),
-                drawerContainerColor = Color.White,
-                drawerTonalElevation = 12.dp
-            ) {
-                // v10.99：设置 / 切换智能体 —— 图标水平排布、小巧
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    DrawerIconButton(Icons.Filled.Build, "切换智能体") {
-                        scope.launch { drawerState.close() }
-                        showAgentView = true
-                    }
-                    DrawerIconButton(Icons.Filled.Settings, "设置") {
-                        scope.launch { drawerState.close() }
-                        showSettings = true
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "历史对话",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                )
-                Text(
-                    "会话历史记录即将上线，先从这里滑入切换场景",
-                    fontSize = 12.sp,
-                    color = Color(0xFF9CA3AF),
-                    modifier = Modifier.padding(horizontal = 20.dp)
-                )
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider(color = Color(0xFFF0F0F2))
-                LazyColumnPlaceholder()
-            }
-        }
-    ) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    // v10.98：左上两条杠（打开历史抽屉）
-                    navigationIcon = {
-                        if (showAgentView) {
-                            // v10.99：Agent 页左上返回对话
-                            IconButton(onClick = { showAgentView = false }) {
-                                Text("←", fontSize = 22.sp, color = Color(0xFF111111))
-                            }
-                        } else {
-                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                TwoBarsIcon()
-                            }
+    Box(
+        Modifier
+            .fillMaxSize()
+            // v10.100：统一手势 —— 键盘弹出右滑收输入法；否则右滑开抽屉 / 左滑关抽屉
+            .pointerInput(imeVisible) {
+                var dx = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { dx = 0f },
+                    onHorizontalDrag = { _, dragAmount ->
+                        dx += dragAmount
+                        if (!imeVisible) {
+                            val new = (drawerOffset.value + dragAmount).coerceIn(0f, drawerWidthPx)
+                            scope.launch { drawerOffset.snapTo(new) }
                         }
                     },
-                    title = {},
-                    actions = {
-                        if (!showAgentView) {
-                        // v10.98：新对话 —— 对话框图标，右上角小加号
-                        IconButton(onClick = { vm.newSession() }) {
-                            Box(Modifier.size(24.dp)) {
-                                Icon(
-                                    Icons.Outlined.ChatBubbleOutline,
-                                    contentDescription = "新对话",
-                                    tint = Color(0xFF111111)
-                                )
-                                Box(
-                                    Modifier
-                                        .align(Alignment.TopEnd)
-                                        .size(11.dp)
-                                        .clip(CircleShape)
-                                        .background(Color.White)
-                                ) {
+                    onDragEnd = {
+                        if (imeVisible) {
+                            if (dx > 100f) focusManager.clearFocus()
+                        } else {
+                            val target = if (drawerOffset.value > drawerWidthPx / 2) drawerWidthPx else 0f
+                            scope.launch { drawerOffset.animateTo(target) }
+                        }
+                    }
+                )
+            }
+    ) {
+        // ---- 抽屉层（底层）：关闭时整体移到屏幕左侧外 ----
+        ModalDrawerSheet(
+            modifier = Modifier
+                .width(drawerWidth)
+                .fillMaxHeight()
+                .offset { IntOffset((drawerOffset.value - drawerWidthPx).toInt(), 0) },
+            drawerContainerColor = Color.White,
+            drawerTonalElevation = 12.dp
+        ) {
+            // v10.99：设置 / 切换智能体 —— 图标水平排布、小巧
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                DrawerIconButton(Icons.Filled.Build, "切换智能体") {
+                    closeDrawer()
+                    showAgentView = true
+                }
+                DrawerIconButton(Icons.Filled.Settings, "设置") {
+                    closeDrawer()
+                    showSettings = true
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "历史对话",
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            )
+            Text(
+                "会话历史记录即将上线，先从这里滑入切换场景",
+                fontSize = 12.sp,
+                color = Color(0xFF9CA3AF),
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(color = Color(0xFFF0F0F2))
+            LazyColumnPlaceholder()
+        }
+
+        // ---- 主内容层（上层）：向右推出，左边缘投影 ----
+        Box(
+            Modifier
+                .fillMaxSize()
+                .offset { IntOffset(drawerOffset.value.toInt(), 0) }
+                .shadow(16.dp, RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp), clip = false)
+        ) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        // v10.100：顶栏保持主页面原样（两条杠 + 新对话），Agent 页不变样
+                        navigationIcon = {
+                            IconButton(onClick = { openDrawer() }) { TwoBarsIcon() }
+                        },
+                        title = {},
+                        actions = {
+                            IconButton(onClick = { vm.newSession(); showAgentView = false }) {
+                                Box(Modifier.size(24.dp)) {
                                     Icon(
-                                        Icons.Filled.Add,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(9.dp),
+                                        Icons.Outlined.ChatBubbleOutline,
+                                        contentDescription = "新对话",
                                         tint = Color(0xFF111111)
                                     )
+                                    Box(
+                                        Modifier
+                                            .align(Alignment.TopEnd)
+                                            .size(11.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.White)
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Add,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(9.dp),
+                                            tint = Color(0xFF111111)
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.White,
-                        titleContentColor = Color(0xFF111111)
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = Color.White,
+                            titleContentColor = Color(0xFF111111)
+                        )
                     )
-                )
-            },
-            bottomBar = {}
-        ) { padding ->
-            Box(Modifier.fillMaxSize().padding(padding)) {
-                // v10.99：切换智能体内嵌主界面，不再是全屏弹层
-                if (showAgentView) RouterScreen(vm) else ChatScreen(vm)
+                },
+                bottomBar = {}
+            ) { padding ->
+                Box(Modifier.fillMaxSize().padding(padding)) {
+                    // v10.100：Agent 输入页内嵌主界面（顶栏不变），顶部带返回对话入口
+                    if (showAgentView) RouterScreen(vm, onBackToChat = { showAgentView = false })
+                    else ChatScreen(vm)
+                }
             }
         }
     }
-
     // v10.97：设置全屏弹层
     if (showSettings) {
         Dialog(
