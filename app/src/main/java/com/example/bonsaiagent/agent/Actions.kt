@@ -183,7 +183,8 @@ object Actions {
                     "已打开分享面板"
                 }
 
-                else -> "[未知动作] $name\n可用：" + CATALOG.replace("\n", " / ")
+                // v10.112：未知动作统一兜底，不再暴露内部清单/英文，不自由发挥
+                else -> "这个我还不会，换个说法试试～"
             }
         } catch (e: Throwable) {
             "[动作执行失败] $name：${e.javaClass.simpleName} ${e.message}"

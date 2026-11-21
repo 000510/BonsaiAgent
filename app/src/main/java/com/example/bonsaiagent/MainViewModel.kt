@@ -1754,7 +1754,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (hit != null && AppIndex.launch(app, hit.pkg)) {
                         mainHandler.post { ai.content.value = "[→ 动作] openapp（模型只回了应用名）\n已为你打开 ${hit.label}。" }
                     } else {
-                        mainHandler.post { ai.content.value = trimmed }
+                        // v10.112：模型"看起来想执行动作却没输出合法标签"时，统一兜底，
+                        // 不再把带英文括号的自由发挥原样显示（如"手电筒…flashlight 应用"）。
+                        val looksLikeAction = Regex("(?i)ACTION|CALL_CLOUD|EXEC|flashlight|手电筒").containsMatchIn(trimmed)
+                        val hasBracket = trimmed.contains('[') || trimmed.contains('［')
+                        mainHandler.post {
+                            ai.content.value = if (looksLikeAction || hasBracket)
+                                "这个我还不会，换个说法试试～" else trimmed
+                        }
                     }
                 }
             }

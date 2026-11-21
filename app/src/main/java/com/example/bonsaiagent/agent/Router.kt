@@ -29,6 +29,36 @@ object Router {
     private val ACTION_RE = Regex("\\[ACTION:([^\\]]*)\\]")
 
     /**
+     * v10.112：容错归一化 —— 把模型常见的"格式错字"纠正成标准格式。
+     * 目标：用户看不到错误，指令照常执行。
+     */
+    fun normalizeOutput(raw: String): String {
+        var s = raw
+        // 1) 全角括号 → 半角
+        s = s.replace('［', '[').replace('］', ']')
+            .replace('（', '(').replace('）', ')')
+        // 2) 全角冒号 → 半角
+        s = s.replace('：', ':')
+        // 3) ACTION 的各种错写：数字0冒充O、数字1冒充I/l、全角字母
+        //    先全角字母转半角（Ａ→A ...）
+        val sb = StringBuilder()
+        for (ch in s) {
+            val c = if (ch.code in 0xFF21..0xFF3A) (ch.code - 0xFF21 + 'A'.code).toChar() // 全角大写
+                    else if (ch.code in 0xFF41..0xFF5A) (ch.code - 0xFF41 + 'a'.code).toChar() // 全角小写
+                    else ch
+            sb.append(c)
+        }
+        s = sb.toString()
+        // 4) 统一大小写后纠正混淆字符：ACTI0N / ACTlON / ACT1ON → ACTION
+        s = s.replace(Regex("(?i)acti[0l1]n"), "ACTION")
+            .replace(Regex("(?i)call[0l1]_?cloud"), "CALL_CLOUD")
+            .replace(Regex("(?i)exec"), "EXEC")
+        // 5) 常见的中文动作标签 → 标准英文（模型偶尔按语义翻译）
+        s = s.replace(Regex("(?i)\\[动作[:：]"), "[ACTION:")
+        return s
+    }
+
+    /**
      * v10.6：解析出**所有**动作。
      *
      * 实测用户问「现在几点顺便说下还有多少电」，模型会正确地输出
@@ -37,12 +67,13 @@ object Router {
      */
     fun parseActions(output: String): List<RouteResult.Action> {
         val out = ArrayList<RouteResult.Action>()
-        for (m in ACTION_RE.findAll(output)) {
+        val normalized = normalizeOutput(output)   // v10.112：先纠正错字
+        for (m in ACTION_RE.findAll(normalized)) {
             val body = m.groupValues[1].trim()
             val sep = body.indexOfFirst { it == ' ' || it == '\u3000' || it == ':' || it == '\t' }
             val name = (if (sep >= 0) body.substring(0, sep) else body).trim().lowercase()
             val argIn = if (sep >= 0) body.substring(sep + 1).trim() else ""
-            val tail = output.substring(m.range.last + 1)
+            val tail = normalized.substring(m.range.last + 1)
                 .lineSequence().firstOrNull()?.trim().orEmpty()
                 .takeIf { it.length in 1..20 && it.none { c -> c in "[]" } } ?: ""
             val arg = argIn.ifBlank { tail }.ifBlank { null }
@@ -52,15 +83,16 @@ object Router {
     }
 
     fun parse(output: String): RouteResult {
+        val normalized = normalizeOutput(output)   // v10.112：先纠正错字
         // ACTION 优先：它比 EXEC 可靠得多，别被后面的 EXEC 抢走
-        ACTION_RE.find(output)?.let { m ->
+        ACTION_RE.find(normalized)?.let { m ->
             val body = m.groupValues[1].trim()
             val sep = body.indexOfFirst { it == ' ' || it == '\u3000' || it == ':' || it == '\t' }
             val name = (if (sep >= 0) body.substring(0, sep) else body).trim().lowercase()
             val argIn = if (sep >= 0) body.substring(sep + 1).trim() else ""
 
             // 括号外紧跟的那一小段也可能是应用名：「[ACTION:openapp] 微信」
-            val tail = output.substring(m.range.last + 1)
+            val tail = normalized.substring(m.range.last + 1)
                 .lineSequence().firstOrNull()?.trim().orEmpty()
                 .takeIf { it.length in 1..20 && it.none { c -> c in "[]" } }
                 ?: ""
@@ -68,11 +100,11 @@ object Router {
             val arg = argIn.ifBlank { tail }.ifBlank { null }
             if (name.isNotEmpty()) return RouteResult.Action(name, arg)
         }
-        if (output.contains("[CALL_CLOUD]")) {
-            val desc = output.substringAfter("[CALL_CLOUD]").trim()
+        if (normalized.contains("[CALL_CLOUD]")) {
+            val desc = normalized.substringAfter("[CALL_CLOUD]").trim()
             return RouteResult.Cloud(desc)
         }
-        EXEC_RE.find(output)?.let { m ->
+        EXEC_RE.find(normalized)?.let { m ->
             return RouteResult.Exec(m.groupValues[1].trim())
         }
         return RouteResult.Local
