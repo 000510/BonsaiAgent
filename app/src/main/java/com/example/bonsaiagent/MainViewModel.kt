@@ -1634,7 +1634,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
                 val s = settings.value
                 val sysPrefix = "<|im_start|>system\n你是信息助理。只根据用户给出的搜索结果作答，用简洁中文，不要编造结果里没有的内容，不要罗列网页标题。\n" +
-                        "用户问"天气"就报天气，问"新闻"就说新闻，直接给结论。<|im_end|>\n"
+                        "用户问天气就报天气，问新闻就说新闻，直接给结论。<|im_end|>\n"
                 val prompt = "<|im_start|>user\n用户问题：$query\n\n搜索结果：\n${material.take(1100)}\n<|im_end|>\n<|im_start|>assistant\n"
 
                 val buf = StringBuilder()
