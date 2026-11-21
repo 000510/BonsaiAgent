@@ -1842,7 +1842,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         // 不能像同步动作那样拿返回值。显示交给 searchAndSummarize 自己刷。
                         if (act.name == "search" && !act.arg.isNullOrBlank()) {
                             mainHandler.post { ai.content.value = sb.toString() }
-                            searchAndSummarize(act.arg!!.trim(), ai)
+                            // v10.123【系统性重构】搜索统一路由，不再逐 bug 打补丁：
+                            //   天气 → 直连 wttr.in（确定性数据，模型/Bing 都不参与，不会编答案）
+                            //   其余 → Bing + 4B 总结（查询词由 buildQuery 确定性构建，剥口语、保实体）
+                            if (WebSearch.isWeather(msg)) {
+                                val city = WebSearch.cityOf(msg)
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    mainHandler.post { ai.content.value = "🌤 正在查${city ?: ""}天气…" }
+                                    val txt = WebSearch.weather(city)
+                                    mainHandler.post { ai.content.value = txt }
+                                }
+                            } else {
+                                searchAndSummarize(WebSearch.buildQuery(msg, act.arg!!.trim()), ai)
+                            }
                             return@launch
                         }
                         var out = Actions.run(app, act.name, act.arg)
