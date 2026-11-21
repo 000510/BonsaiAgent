@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -71,10 +72,17 @@ fun ChatScreen(vm: MainViewModel) {
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                // v10.102：投影改纯阴影，关掉 Material 点光顶部高光（那道"亮边"）
+                .shadow(
+                    elevation = 8.dp,
+                    shape = RoundedCornerShape(20.dp),
+                    ambientColor = Color(0x40000000),
+                    spotColor = Color.Transparent
+                ),
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
-            shadowElevation = 8.dp,
+            shadowElevation = 0.dp,
             tonalElevation = 0.dp
         ) {
             Box(

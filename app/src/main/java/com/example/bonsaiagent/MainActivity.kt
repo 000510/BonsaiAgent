@@ -12,6 +12,9 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -155,29 +158,32 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            // v10.100：统一手势 —— 键盘弹出右滑收输入法；否则右滑开抽屉 / 左滑关抽屉
-            .pointerInput(imeVisible) {
-                var dx = 0f
-                detectHorizontalDragGestures(
-                    onDragStart = { dx = 0f },
-                    onHorizontalDrag = { _, dragAmount ->
-                        dx += dragAmount
-                        if (!imeVisible) {
-                            val new = (drawerOffset.value + dragAmount).coerceIn(0f, drawerWidthPx)
-                            scope.launch { drawerOffset.snapTo(new) }
-                        }
-                    },
-                    onDragEnd = {
-                        if (imeVisible) {
-                            if (dx > 100f) focusManager.clearFocus()
-                        } else {
-                            // v10.101：灵敏度提升 —— 划过 30% 就展开（原 50% 需划过半屏才展开）
-                            val target = if (drawerOffset.value > drawerWidthPx * 0.3f) drawerWidthPx else 0f
-                            scope.launch { drawerOffset.animateTo(target) }
-                        }
+            .background(Color.White)   // v10.102：根容器白底，主内容缩小时不再露出黑边
+            // v10.102：手势改 draggable —— 支持 fling 惯性（快划即开/收）；键盘弹出右滑收输入法
+            .draggable(
+                orientation = Orientation.Horizontal,
+                state = rememberDraggableState { delta ->
+                    if (!imeVisible) {
+                        val new = (drawerOffset.value + delta).coerceIn(0f, drawerWidthPx)
+                        scope.launch { drawerOffset.snapTo(new) }
                     }
-                )
-            }
+                },
+                onDragStopped = { velocity ->
+                    if (imeVisible) {
+                        // 键盘弹出：右滑（正速度）收输入法
+                        if (velocity > 300f) focusManager.clearFocus()
+                    } else {
+                        // v10.102：惯性 —— 快划直接展开/收回（±600px/s），慢划看距离（30%）
+                        val open = when {
+                            velocity > 600f -> true
+                            velocity < -600f -> false
+                            else -> drawerOffset.value > drawerWidthPx * 0.3f
+                        }
+                        val target = if (open) drawerWidthPx else 0f
+                        scope.launch { drawerOffset.animateTo(target) }
+                    }
+                }
+            )
     ) {
         // ---- 抽屉层（底层）：关闭时整体移到屏幕左侧外 ----
         ModalDrawerSheet(
