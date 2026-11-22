@@ -91,6 +91,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val genLock = java.util.concurrent.atomic.AtomicBoolean(false)
 
     val settings = mutableStateOf(store.load())
+
+    // v10.136：云端额度耗尽 → Agent 页底部弹液态玻璃气泡，用户点一下就能切中转站。
+    // quotaBlocked=true 时显示气泡；lastCloudMsg 是触发耗尽的那条，切站后原地续跑它。
+    val quotaBlocked = mutableStateOf(false)
+    private var lastCloudMsg: String = ""
     // v10.85：优先恢复上次加载的模型；没有记录才退回「排除草稿后取最大」
     val modelPath = mutableStateOf(
         ModelLoader.resolveInitialModel(
@@ -1718,6 +1723,70 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: Throwable) {}
     }
 
+    /**
+     * v10.136：一次云端对话（从 sendAgent 里抽出，便于额度耗尽后切站原地重试）。
+     * 模型自判要不要联网搜（function calling）；累加真实 token；
+     * 命中额度用尽时置 quotaBlocked=true → Agent 页底部弹气泡。
+     */
+    private fun runCloudChat(ai: ChatMessage, msg: String) {
+        val s = settings.value
+        val key = when (s.cloudProvider) {
+            "st" -> s.stKey
+            "r77625" -> s.r77625Key
+            else -> s.xlhKey
+        }
+        lastCloudMsg = msg
+        genStatus.value = GenStatus(phase = "云端思考中...")
+        viewModelScope.launch(Dispatchers.IO) {
+            val prov = CloudSearch.provider(settings.value.cloudProvider)
+            val history = agentMessages
+                .filter { it.role == "user" || it.role == "assistant" }
+                .filter { !it.content.value.isNullOrBlank() }
+                .takeLast(8)
+                .map { it.role to it.content.value }
+            val res = try {
+                CloudSearch.chat(prov.baseUrl, key, settings.value.cloudModel, history, msg)
+            } catch (e: Exception) { CloudSearch.ChatResult("（云端出错：${e.message}）", 0) }
+            // v10.135：累加云端 token（跨天重置），供 Agent 页余量面板 + 使用提醒
+            if (res.tokens > 0) {
+                val today = java.text.SimpleDateFormat(
+                    "yyyy-MM-dd", java.util.Locale.CHINA).format(java.util.Date())
+                val cur = settings.value
+                var used = if (cur.tokenDate != today) 0 else cur.tokenUsed
+                used += res.tokens
+                updateSettings(cur.copy(tokenUsed = used, tokenDate = today))
+            }
+            mainHandler.post {
+                // v10.136：额度耗尽 → 底部气泡（气泡里点站名即可切过去续跑）
+                quotaBlocked.value = res.exhausted
+                val budget = settings.value.tokenBudget
+                val used = settings.value.tokenUsed
+                var reply = res.content
+                if (used > budget) {
+                    reply = "⚠️ 云端今日额度已超（$used / $budget），建议关云端根治或换站。\n\n" + reply
+                } else if (budget > 0 && used.toFloat() / budget >= 0.8f) {
+                    reply = "⚠️ 云端今日已用 ${(used * 100 / budget)}%，省着点。\n\n" + reply
+                }
+                ai.content.value = reply
+                genStatus.value = GenStatus(phase = "就绪")
+            }
+            genLock.set(false)
+        }
+    }
+
+    /** v10.136：额度耗尽气泡里点某个中转站 → 切过去，并原地续跑刚才那条（不重复发用户消息） */
+    fun retryCloudWith(pid: String) {
+        if (pid == settings.value.cloudProvider) return
+        val p = CloudSearch.provider(pid)
+        updateSettings(settings.value.copy(cloudProvider = pid, cloudModel = p.defaultModel))
+        quotaBlocked.value = false
+        val msg = lastCloudMsg
+        if (msg.isBlank()) return
+        val ai = agentMessages.lastOrNull { it.role == "assistant" } ?: return
+        ai.content.value = "（切换到「${p.label}」重试中…）"
+        runCloudChat(ai, msg)
+    }
+
     /** 页面2：混合路由 + Agent 执行 */
     fun sendAgent(text: String) {
         if (!Llama.isLoaded()) { status.value = "请先在设置页导入并加载模型"; return }
@@ -1775,46 +1844,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // v10.134：云端根治——模型自判搜索。开启且所选站 Key 非空时，对话直接交给云端。
         // 模型自己判断要不要联网（function calling），本地词表整个退役为回退。
         if (s.cloudEnabled) {
-            val prov = CloudSearch.provider(s.cloudProvider)
             val key = when (s.cloudProvider) {
                 "st" -> s.stKey
                 "r77625" -> s.r77625Key
                 else -> s.xlhKey
             }
             if (key.isNotBlank()) {
-                genStatus.value = GenStatus(phase = "云端思考中...")
-                viewModelScope.launch(Dispatchers.IO) {
-                    val history = agentMessages
-                        .filter { it.role == "user" || it.role == "assistant" }
-                        .filter { !it.content.value.isNullOrBlank() }
-                        .takeLast(8)
-                        .map { it.role to it.content.value }
-                    val res = try {
-                        CloudSearch.chat(prov.baseUrl, key, s.cloudModel, history, msg)
-                    } catch (e: Exception) { CloudSearch.ChatResult("（云端出错：${e.message}）", 0) }
-                    // v10.135：累加云端 token（跨天重置），供 Agent 页余量面板 + 使用提醒
-                    if (res.tokens > 0) {
-                        val today = java.text.SimpleDateFormat(
-                            "yyyy-MM-dd", java.util.Locale.CHINA).format(java.util.Date())
-                        var used = s.tokenUsed
-                        if (s.tokenDate != today) used = 0
-                        used += res.tokens
-                        updateSettings(s.copy(tokenUsed = used, tokenDate = today))
-                    }
-                    mainHandler.post {
-                        val budget = s.tokenBudget
-                        val used = settings.value.tokenUsed
-                        var reply = res.content
-                        if (used > budget) {
-                            reply = "⚠️ 云端今日额度已超（$used / $budget），建议关云端根治或换站。\n\n" + reply
-                        } else if (budget > 0 && used.toFloat() / budget >= 0.8f) {
-                            reply = "⚠️ 云端今日已用 ${(used * 100 / budget)}%，省着点。\n\n" + reply
-                        }
-                        ai.content.value = reply
-                        genStatus.value = GenStatus(phase = "就绪")
-                    }
-                    genLock.set(false)
-                }
+                // v10.136：新对话先把额度耗尽气泡收起（这次不是续跑）
+                quotaBlocked.value = false
+                runCloudChat(ai, msg)
                 return
             }
         }

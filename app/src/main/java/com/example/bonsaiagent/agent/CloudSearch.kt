@@ -60,7 +60,11 @@ object CloudSearch {
 """.trimIndent()
 
     /** 一次云端对话的结果：回复文本 + 本次消耗的 token（跨轮 usage 累加） */
-    data class ChatResult(val content: String, val tokens: Int)
+    /**
+     * exhausted=true 表示「本站额度用尽 / 限流」——这类错误靠继续重试没用，
+     * 只能切换中转站。云端返回 401/402/429 或报错文案含额度关键词时置 true。
+     */
+    data class ChatResult(val content: String, val tokens: Int, val exhausted: Boolean = false)
 
     /**
      * 一次云端对话：模型自己决定是否 web_search（function calling）。
@@ -105,11 +109,26 @@ object CloudSearch {
             val resp = client.newCall(req).execute()
             val text = resp.body?.string() ?: return ChatResult("（云端无响应）", totalTokens)
             if (!resp.isSuccessful) {
-                return ChatResult("（云端报错 ${resp.code}）" + try {
+                // v10.136：区分「额度用尽/限流」与其它错误——额度问题只能靠换中转站解决
+                val errMsg = try {
                     JSONObject(text).optJSONObject("error")?.optString("message") ?: ""
-                } catch (e: Exception) { text.take(120) }, totalTokens)
+                } catch (e: Exception) { text.take(120) }
+                val ex = resp.code in intArrayOf(401, 402, 429) || run {
+                    val t = errMsg.lowercase()
+                    t.contains("quota") || t.contains("limit") || t.contains("exceed") ||
+                        t.contains("insufficient") || t.contains("balance") ||
+                        t.contains("额度") || t.contains("配额") || t.contains("限流") ||
+                        t.contains("未开通") || t.contains("余额")
+                }
+                return ChatResult("（云端报错 ${resp.code}${if (errMsg.isNotBlank()) " $errMsg" else ""}）",
+                    totalTokens, exhausted = ex)
             }
             val j = JSONObject(text)
+            // v10.136：有些网关把错误塞进 200 响应体，也要识别成额度问题
+            j.optJSONObject("error")?.let { err ->
+                return ChatResult("（云端报错：${err.optString("message", "")}）",
+                    totalTokens, exhausted = true)
+            }
             j.optJSONObject("usage")?.let { u ->
                 totalTokens += u.optInt("prompt_tokens") + u.optInt("completion_tokens")
             }
