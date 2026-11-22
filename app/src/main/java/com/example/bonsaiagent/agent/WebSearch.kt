@@ -49,7 +49,9 @@ object WebSearch {
     //   不再等模型输出 search 指令。
     private val SEARCH_INTENT = Regex(
         "搜一下|搜索|查一下|帮我查|查查|哪款|哪部|什么型号|什么手机|哪个型号|多少钱|价格多少|" +
-        "推荐|对比|评测|有什么区别|参数|配置|最新.{0,6}(机型|手机|型号|款|产品)|上市|发布"
+        // v10.130【修复】裸"最新"也是检索意图："我是说最新"里"最新"是结尾，旧正则要求最新后跟实体词
+        //   才命中，不触发强制搜索 → 模型乱答时间/功能清单（截图实测）。“最新”基本总是检索意图，直接匹配。
+        "推荐|对比|评测|有什么区别|参数|配置|最新|上市|发布"
     )
     fun shouldSearch(msg: String): Boolean = SEARCH_INTENT.containsMatchIn(msg)
 
@@ -219,7 +221,9 @@ object WebSearch {
     // v10.127【修复】省略/指代表达需要补上文主题："我是说最新一款"里"最新一款"指代上文的
     //   "华为手机"，不补全就搜"最新一款/我说一款"（实测搜不到，AI 答"搜索结果中没有关于..."）。
     //   检测到省略/指代且上文有主题词时，拼成"主题 + 查询词"再搜。
-    private val ELLIPSIS_RE = Regex("最新.{0,4}(一款|款|机型|手机|型号)|这款|那款|这个|那个|哪款|它(是|呢)|啥")
+    // v10.130【修复】裸"最新"指代也要拼上文："我是说最新"里"最新"是结尾（后面无"一款/机型"），
+    //   旧正则不识别 → 不拼 topic → 搜"最新"太泛。末尾"最新"视为指代上文主题词，拼"topic 最新"。
+    private val ELLIPSIS_RE = Regex("最新$|最新[，。？！\\s、]+|最新.{0,4}(一款|款|机型|手机|型号)|这款|那款|这个|那个|哪款|它(是|呢)|啥")
     fun withContext(q: String, prevUser: String?): String {
         if (!ELLIPSIS_RE.containsMatchIn(q)) return q
         if (prevUser.isNullOrBlank()) return q
