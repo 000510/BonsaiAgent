@@ -115,7 +115,7 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
 
     // v10.136：云端额度耗尽 → 底部液态玻璃气泡（可展开中转站列表，点一下切站续跑）
     if (vm.quotaBlocked.value) {
-        GlassQuotaBubble(vm)
+        GlassQuotaBubble(vm, Modifier.align(Alignment.BottomCenter))
     }
 
     // v7.1：Agent 页也挂上推理状态条（等它跑的时候至少知道在干什么、多快）
@@ -135,12 +135,11 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
  * 展开后列出所有中转站，点一下切过去，并把刚才那条任务原地续跑（不用重打一遍）。
  */
 @Composable
-private fun GlassQuotaBubble(vm: MainViewModel) {
+private fun GlassQuotaBubble(vm: MainViewModel, modifier: Modifier = Modifier) {
     var expanded by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(26.dp)
     Column(
-        modifier = Modifier
-            .align(Alignment.BottomCenter)
+        modifier = modifier
             .fillMaxWidth()
             .imePadding()
             .padding(horizontal = 12.dp, bottom = 104.dp, top = 8.dp)
