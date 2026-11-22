@@ -55,7 +55,7 @@ data class AgentSettings(
     val cloudEnabled: Boolean = false,
     val cloudProvider: String = "xlh",
     val cloudModel: String = "DeepSeek-V4.1-Flash 小力孩AI",
-    val stKey: String = "",
+    val stKey: String = "sk-NZPAa3egGAiMCOkEXYoblcV1FNuDgAOi",
     val xlhKey: String = "",
     val r77625Key: String = "",
 
@@ -192,7 +192,7 @@ class SettingsStore(context: Context) {
         cloudProvider = sp.getString("cloudProvider", "xlh") ?: "xlh",
         cloudModel = sp.getString("cloudModel", "DeepSeek-V4.1-Flash 小力孩AI")
             ?: "DeepSeek-V4.1-Flash 小力孩AI",
-        stKey = sp.getString("stKey", "") ?: "",
+        stKey = sp.getString("stKey", "sk-NZPAa3egGAiMCOkEXYoblcV1FNuDgAOi") ?: "sk-NZPAa3egGAiMCOkEXYoblcV1FNuDgAOi",
         xlhKey = sp.getString("xlhKey", "") ?: "",
         r77625Key = sp.getString("r77625Key", "") ?: "",
         tokenBudget = sp.getInt("tokenBudget", 2000000),

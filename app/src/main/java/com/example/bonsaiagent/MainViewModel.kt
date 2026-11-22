@@ -1803,7 +1803,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     mainHandler.post {
                         val budget = s.tokenBudget
-                        val used = s.tokenUsed
+                        val used = settings.value.tokenUsed
                         var reply = res.content
                         if (used > budget) {
                             reply = "⚠️ 云端今日额度已超（$used / $budget），建议关云端根治或换站。\n\n" + reply
