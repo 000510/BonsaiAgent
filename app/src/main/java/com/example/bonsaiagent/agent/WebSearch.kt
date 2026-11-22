@@ -51,7 +51,10 @@ object WebSearch {
         "搜一下|搜索|查一下|帮我查|查查|哪款|哪部|什么型号|什么手机|哪个型号|多少钱|价格多少|" +
         // v10.130【修复】裸"最新"也是检索意图："我是说最新"里"最新"是结尾，旧正则要求最新后跟实体词
         //   才命中，不触发强制搜索 → 模型乱答时间/功能清单（截图实测）。“最新”基本总是检索意图，直接匹配。
-        "推荐|对比|评测|有什么区别|参数|配置|最新|上市|发布"
+        "推荐|对比|评测|有什么区别|参数|配置|最新|上市|发布|" +
+        // v10.131【修复】具体型号追问（"那pura90呢"）也是检索意图：型号不带"手机/型号/哪款"关键词时
+        //   旧正则不命中，模型凭训练知识答套话/幻觉（Pura 90"时尚设计强大性能"截图实测）。直接匹配型号。
+        "([Pp]ura|mate|nova|畅享|荣耀|小米|iPhone|苹果)\\s?[A-Za-z]?\\s?\\d+"
     )
     fun shouldSearch(msg: String): Boolean = SEARCH_INTENT.containsMatchIn(msg)
 
@@ -91,7 +94,21 @@ object WebSearch {
      * v10.123：构建搜索词。优先用模型给的词（已清洗），太短/空则回退到用户原话。
      * 模型给的词不可靠（会带口语/漏实体），这里只把"词"当参考，实体提取靠清洗兜底。
      */
+    // v10.131：从用户原话提取具体型号（Pura 90 / Mate 70 / Nova 12 / 畅享 100 / Pura 80 Ultra）。
+    //   型号是最精准的检索实体，"那pura90呢"这类追问应直接搜型号，模型常凭训练知识答套话/幻觉。
+    private val MODEL_RE = Regex("([Pp]ura|mate|nova|畅享|荣耀|小米|iPhone|苹果)\\s?[A-Za-z]?\\s?\\d+")
+    private fun extractModel(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        val m = MODEL_RE.find(raw) ?: return null
+        val brand = m.groupValues[1]
+        val b = if (brand.first().isLowerCase()) brand.replaceFirstChar { it.uppercase() } else brand
+        return "$b ${m.groupValues[2].trim()}"
+    }
+
     fun buildQuery(rawMsg: String, modelArg: String?): String {
+        // v10.131【修复】具体型号追问：直接返回型号作查询词
+        extractModel(rawMsg)?.let { return it }
+        modelArg?.let { extractModel(it)?.let { m -> return m } }
         val fromModel = modelArg?.let { normalizeQuery(it) }.orEmpty()
         val base = if (fromModel.length >= 2) fromModel else normalizeQuery(rawMsg)
         // v10.123【方案第1条】限8词：模型容易往词里塞累赘，超长就截断
