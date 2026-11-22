@@ -57,7 +57,13 @@ data class AgentSettings(
     val cloudModel: String = "DeepSeek-V4.1-Flash 小力孩AI",
     val stKey: String = "",
     val xlhKey: String = "",
-    val r77625Key: String = ""
+    val r77625Key: String = "",
+
+    // v10.135：云端 token 用量（每日）。tokenBudget=用户设定每日上限，tokenUsed=今日已用，
+    // tokenDate=记录日（跨天自动重置）。
+    val tokenBudget: Int = 2000000,
+    val tokenUsed: Int = 0,
+    val tokenDate: String = ""
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述、不要夹英文。
@@ -188,7 +194,10 @@ class SettingsStore(context: Context) {
             ?: "DeepSeek-V4.1-Flash 小力孩AI",
         stKey = sp.getString("stKey", "") ?: "",
         xlhKey = sp.getString("xlhKey", "") ?: "",
-        r77625Key = sp.getString("r77625Key", "") ?: ""
+        r77625Key = sp.getString("r77625Key", "") ?: "",
+        tokenBudget = sp.getInt("tokenBudget", 2000000),
+        tokenUsed = sp.getInt("tokenUsed", 0),
+        tokenDate = sp.getString("tokenDate", "") ?: ""
     )
 
     fun save(s: AgentSettings) {
@@ -223,6 +232,9 @@ class SettingsStore(context: Context) {
             putString("stKey", s.stKey)
             putString("xlhKey", s.xlhKey)
             putString("r77625Key", s.r77625Key)
+            putInt("tokenBudget", s.tokenBudget)
+            putInt("tokenUsed", s.tokenUsed)
+            putString("tokenDate", s.tokenDate)
         }.apply()
     }
 }

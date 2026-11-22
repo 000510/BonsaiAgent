@@ -352,6 +352,24 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         Text("换站会自动切模型；Key 各站独立保存。77625 每分钟 5 次限流较慢，建议主力用小力孩。",
             style = MaterialTheme.typography.bodySmall)
 
+        // v10.135：每日云端 Token 上限设置
+        Text("每日云端 Token 上限（今日已用 ${s.tokenUsed}）",
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+        OutlinedTextField(
+            value = s.tokenBudget.toString(),
+            onValueChange = { v ->
+                val n = v.filter { it.isDigit() }.toIntOrNull()
+                if (n != null && n > 0) vm.updateSettings(s.copy(tokenBudget = n))
+            },
+            label = { Text("每日上限") },
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            singleLine = true,
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
+        )
+        Text("用超 80% 会提示，超限红色提醒。200 万≈5000 轮/天。",
+            style = MaterialTheme.typography.bodySmall)
+
         Spacer(Modifier.height(24.dp))
     }
 }

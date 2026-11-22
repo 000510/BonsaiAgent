@@ -59,14 +59,18 @@ object CloudSearch {
 结合上一轮话题理解，必要时调用 web_search 查最新信息。
 """.trimIndent()
 
+    /** 一次云端对话的结果：回复文本 + 本次消耗的 token（跨轮 usage 累加） */
+    data class ChatResult(val content: String, val tokens: Int)
+
     /**
      * 一次云端对话：模型自己决定是否 web_search（function calling）。
      * @param history 最近对话历史 (role, content)
-     * @return 模型最终回复文本
+     * @return 模型最终回复 + 消耗 token
      */
     fun chat(baseUrl: String, apiKey: String, model: String,
              history: List<Pair<String, String>>, userMsg: String,
-             maxTokens: Int = 1600): String {
+             maxTokens: Int = 1600): ChatResult {
+        var totalTokens = 0
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content", SYS))
         history.takeLast(8).forEach { (role, content) ->
@@ -99,15 +103,18 @@ object CloudSearch {
                 .post(body.toString().toRequestBody("application/json".toMediaType()))
                 .build()
             val resp = client.newCall(req).execute()
-            val text = resp.body?.string() ?: return "（云端无响应）"
+            val text = resp.body?.string() ?: return ChatResult("（云端无响应）", totalTokens)
             if (!resp.isSuccessful) {
-                return "（云端报错 ${resp.code}）" + try {
+                return ChatResult("（云端报错 ${resp.code}）" + try {
                     JSONObject(text).optJSONObject("error")?.optString("message") ?: ""
-                } catch (e: Exception) { text.take(120) }
+                } catch (e: Exception) { text.take(120) }, totalTokens)
             }
             val j = JSONObject(text)
+            j.optJSONObject("usage")?.let { u ->
+                totalTokens += u.optInt("prompt_tokens") + u.optInt("completion_tokens")
+            }
             val msg = j.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
-                ?: return "（云端无消息）"
+                ?: return ChatResult("（云端无消息）", totalTokens)
             val tcs = msg.optJSONArray("tool_calls")
             if (tcs != null && tcs.length() > 0) {
                 // 模型决定要搜索：本地抓 Bing，喂回 tool 结果
@@ -128,9 +135,9 @@ object CloudSearch {
                         .put("content", result.take(1800)))
                 }
             } else {
-                return msg.optString("content")
+                return ChatResult(msg.optString("content"), totalTokens)
             }
         }
-        return "（搜索循环超限）"
+        return ChatResult("（搜索循环超限）", totalTokens)
     }
 }

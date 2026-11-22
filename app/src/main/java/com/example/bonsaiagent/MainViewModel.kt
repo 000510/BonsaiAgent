@@ -1789,11 +1789,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         .filter { !it.content.value.isNullOrBlank() }
                         .takeLast(8)
                         .map { it.role to it.content.value }
-                    val out = try {
+                    val res = try {
                         CloudSearch.chat(prov.baseUrl, key, s.cloudModel, history, msg)
-                    } catch (e: Exception) { "（云端出错：${e.message}）" }
+                    } catch (e: Exception) { CloudSearch.ChatResult("（云端出错：${e.message}）", 0) }
+                    // v10.135：累加云端 token（跨天重置），供 Agent 页余量面板 + 使用提醒
+                    if (res.tokens > 0) {
+                        val today = java.text.SimpleDateFormat(
+                            "yyyy-MM-dd", java.util.Locale.CHINA).format(java.util.Date())
+                        var used = s.tokenUsed
+                        if (s.tokenDate != today) used = 0
+                        used += res.tokens
+                        updateSettings(s.copy(tokenUsed = used, tokenDate = today))
+                    }
                     mainHandler.post {
-                        ai.content.value = out
+                        val budget = s.tokenBudget
+                        val used = s.tokenUsed
+                        var reply = res.content
+                        if (used > budget) {
+                            reply = "⚠️ 云端今日额度已超（$used / $budget），建议关云端根治或换站。\n\n" + reply
+                        } else if (budget > 0 && used.toFloat() / budget >= 0.8f) {
+                            reply = "⚠️ 云端今日已用 ${(used * 100 / budget)}%，省着点。\n\n" + reply
+                        }
+                        ai.content.value = reply
                         genStatus.value = GenStatus(phase = "就绪")
                     }
                     genLock.set(false)

@@ -341,15 +341,54 @@ private fun MainTabs(vm: MainViewModel, onPickModel: () -> Unit) {
                                             shadowElevation = 8.dp,
                                             modifier = Modifier.padding(top = 4.dp, end = 8.dp)
                                         ) {
-                                            Column(Modifier.padding(12.dp).width(200.dp)) {
-                                                Text("上下文用量", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                                Spacer(Modifier.height(6.dp))
-                                                Text("已用约 $estTokens / $ctxMax token", fontSize = 12.sp)
-                                                Text("占比 ${(ctxFrac * 100).toInt()}%", fontSize = 12.sp, color = Color(0xFF4D6BFE))
-                                                Spacer(Modifier.height(4.dp))
-                                                Text("历史 ${vm.chatMessages.size} 条 · Agent ${vm.agentMessages.size} 条",
-                                                    fontSize = 11.sp, color = Color(0xFF6B7280))
-                                                Text("（token 为字符数估算值）", fontSize = 10.sp, color = Color(0xFF9CA3AF))
+                                            Column(Modifier.padding(12.dp).width(220.dp)) {
+                                                var tokenTab by remember { mutableStateOf(false) }
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    TextButton(onClick = { tokenTab = false }) {
+                                                        Text("上下文", fontSize = 12.sp,
+                                                            color = if (!tokenTab) Color(0xFF4D6BFE) else Color(0xFF9CA3AF))
+                                                    }
+                                                    TextButton(onClick = { tokenTab = true }) {
+                                                        Text("Token余量", fontSize = 12.sp,
+                                                            color = if (tokenTab) Color(0xFF4D6BFE) else Color(0xFF9CA3AF))
+                                                    }
+                                                }
+                                                if (!tokenTab) {
+                                                    Text("上下文用量", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                    Spacer(Modifier.height(6.dp))
+                                                    Text("已用约 $estTokens / $ctxMax token", fontSize = 12.sp)
+                                                    Text("占比 ${(ctxFrac * 100).toInt()}%", fontSize = 12.sp, color = Color(0xFF4D6BFE))
+                                                    Spacer(Modifier.height(4.dp))
+                                                    Text("历史 ${vm.chatMessages.size} 条 · Agent ${vm.agentMessages.size} 条",
+                                                        fontSize = 11.sp, color = Color(0xFF6B7280))
+                                                    Text("（token 为字符数估算值）", fontSize = 10.sp, color = Color(0xFF9CA3AF))
+                                                } else {
+                                                    // v10.135：云端 Token 余量（真实 usage 累加，非估算）
+                                                    val tUsed = vm.settings.value.tokenUsed
+                                                    val tBudget = vm.settings.value.tokenBudget.coerceAtLeast(1)
+                                                    val tFrac = (tUsed.toFloat() / tBudget).coerceIn(0f, 1f)
+                                                    val tColor = when {
+                                                        tUsed > tBudget -> Color(0xFFDC2626)
+                                                        tFrac > 0.8f -> Color(0xFFEA580C)
+                                                        else -> Color(0xFF16A34A)
+                                                    }
+                                                    Text("云端 Token 余量", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                    Spacer(Modifier.height(6.dp))
+                                                    Text("已用 $tUsed / $tBudget token", fontSize = 12.sp)
+                                                    LinearProgressIndicator(
+                                                        progress = tFrac,
+                                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                                        color = tColor, trackColor = Color(0xFFE5E7EB)
+                                                    )
+                                                    Text("今日已用 ${(tFrac * 100).toInt()}%", fontSize = 11.sp, color = tColor)
+                                                    Spacer(Modifier.height(4.dp))
+                                                    if (tUsed > tBudget) {
+                                                        Text("⚠️ 已超限，建议关闭云端根治或换站", fontSize = 11.sp, color = Color(0xFFDC2626))
+                                                    } else if (tFrac > 0.8f) {
+                                                        Text("⚠️ 已用 80%，注意余量", fontSize = 11.sp, color = Color(0xFFEA580C))
+                                                    }
+                                                    Text("在设置页可调整每日上限", fontSize = 10.sp, color = Color(0xFF9CA3AF))
+                                                }
                                             }
                                         }
                                     }
