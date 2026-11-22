@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +31,16 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     val listState = rememberLazyListState()
 
     Box(Modifier.fillMaxSize()) {
+    val blocked = vm.quotaBlocked.value
+    // v10.139：Android 13+ 走「背景真折射」——气泡背后的消息层被 AGSL 掰弯（照资料包 demo 的做法）
+    val refractOn = android.os.Build.VERSION.SDK_INT >= 33
+    var bubbleBounds by remember { mutableStateOf(Rect.Zero) }
+
+    Box(
+        Modifier
+            .matchParentSize()
+            .liquidRefractBackground(enabled = blocked && refractOn, bubble = bubbleBounds)
+    ) {
     // v10.99：消息区固定不动，不随键盘上移（键盘弹出只推输入框）
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         // v10.107：WORK 艺术字标识——证明当前是 Agent 模式（替代原返回入口/路由说明）
@@ -51,6 +62,7 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
         ) {
             items(vm.agentMessages, key = { it.id }) { msg -> Bubble(msg) }
         }
+    }
     }
 
     // v10.99：输入框 overlay 贴底 + imePadding，键盘弹出只推输入框；加投影
@@ -114,8 +126,13 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     }
 
     // v10.136：云端额度耗尽 → 底部液态玻璃气泡（可展开中转站列表，点一下切站续跑）
-    if (vm.quotaBlocked.value) {
-        GlassQuotaBubble(vm, Modifier.align(Alignment.BottomCenter))
+    if (blocked) {
+        GlassQuotaBubble(
+            vm = vm,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            selfPaint = !refractOn,
+            onBounds = { bubbleBounds = it }
+        )
     }
 
     // v7.1：Agent 页也挂上推理状态条（等它跑的时候至少知道在干什么、多快）
@@ -136,13 +153,20 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
  */
 
 @Composable
-private fun GlassQuotaBubble(vm: MainViewModel, modifier: Modifier = Modifier) {
+private fun GlassQuotaBubble(
+    vm: MainViewModel,
+    modifier: Modifier = Modifier,
+    selfPaint: Boolean = true,
+    onBounds: ((Rect) -> Unit)? = null
+) {
     var expanded by remember { mutableStateOf(false) }
     LiquidGlassCard(
         modifier = modifier
             .fillMaxWidth()
             .imePadding()
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp),
+        selfPaint = selfPaint,
+        onBounds = onBounds
     ) {
         Column(Modifier.fillMaxWidth()) {
             Row(
