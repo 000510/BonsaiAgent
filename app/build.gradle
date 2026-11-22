@@ -12,7 +12,7 @@ android {
         applicationId "com.example.bonsailite"
         minSdk 26            // Android 8.0，覆盖绝大多数现役手机
         targetSdk 34
-        versionCode 175
+        versionCode 176
         versionName "10.137"
 
         // 只编 arm64（手机主流，体积也小）

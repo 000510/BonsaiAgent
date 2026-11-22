@@ -110,8 +110,8 @@ fun LiquidGlassCard(
             )
         }
 
-        // ---- 内容层（文字/按钮），内缩 pad 对齐玻璃边界 ----
-        Box(Modifier.matchParentSize().padding(pad), content = content)
+        // ---- 内容层（文字/按钮）：用自身尺寸撑开父 Box（不能 matchParentSize，否则父高度塌成 0 不可见）----
+        Box(Modifier.fillMaxWidth().padding(pad), content = content)
     }
 }
 
