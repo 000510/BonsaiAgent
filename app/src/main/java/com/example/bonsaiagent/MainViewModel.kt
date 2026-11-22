@@ -1648,7 +1648,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
                 val s = settings.value
                 val sysPrefix = "<|im_start|>system\n你是信息助理。只根据用户给出的搜索结果作答，用简洁中文，不要编造结果里没有的内容，不要罗列网页标题。\n" +
-                        "用户问天气就报天气，问新闻就说新闻，直接给结论。<|im_end|>\n"
+                        "用户问天气就报天气，问新闻就说新闻，直接给结论。\n" +
+                        // v10.128【修复】"最新一款/最新机型/哪款最新"这类：4B 把用户问题当字面在结果里找，
+                        //   找不到就保守答"搜索结果中未提及"（实测，结果里明明有 Pura 80 Ultra / 畅享100）。
+                        //   必须引导它从结果里挑最近发布/最高端的型号作答，不许答"未提及/找不到"。
+                        "用户问“最新/最新一款/最新机型/哪款最新/最新发布/什么时候发布”这类时，从搜索结果里挑出最近发布或最高端的型号作答" +
+                        "（按 Ultra、Pro Max、Plus、Pro、数字更大的型号判断），不要因为结果里没有“最新”二字就回答“未提及/找不到”。<|im_end|>\n"
                 val prompt = "<|im_start|>user\n用户问题：$query\n\n搜索结果：\n${material.take(1100)}\n<|im_end|>\n<|im_start|>assistant\n"
 
                 val buf = StringBuilder()
@@ -1827,7 +1832,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             //   产出 search 动作，不触发 WebSearch 就凭训练知识答（Mate 60 过时/"我无法联网"/
             //   Mate 90 幻觉，截图实测）。命中 shouldSearch → 确定性搜索通道，不依赖模型路由。
             if (WebSearch.shouldSearch(msg) && !WebSearch.isWeather(msg)) {
-                val prev = chatMessages.lastOrNull { it.role == "user" && it.content.value != msg }?.content?.value
+                // v10.129【根因·AgentMore全员确认】sendAgent 的对话历史写入的是 agentMessages（只写不读），
+                //   prev 之前从 chatMessages 取——那是主对话页的独立列表，Agent 页追问时取不到上文，
+                //   导致"我是说最新一款"拼不上"华为最新手机"（v10.127/128 补丁全白打）。
+                //   必须从 agentMessages 取（Agent 页自己的历史）。
+                val prev = agentMessages.lastOrNull { it.role == "user" && it.content.value != msg }?.content?.value
                 mainHandler.post { ai.content.value = "[→ 动作] search（信息检索，自动搜索）\n" }
                 searchAndSummarize(WebSearch.withContext(WebSearch.buildQuery(msg, null), prev), ai)
                 return@launch
@@ -1862,7 +1871,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                                     mainHandler.post { ai.content.value = txt }
                                 }
                             } else {
-                                val prev = chatMessages.lastOrNull { it.role == "user" && it.content.value != msg }?.content?.value
+                                // v10.129【根因·AgentMore全员确认】同上：prev 必须从 agentMessages 取
+                                val prev = agentMessages.lastOrNull { it.role == "user" && it.content.value != msg }?.content?.value
                                 searchAndSummarize(WebSearch.withContext(WebSearch.buildQuery(msg, act.arg!!.trim()), prev), ai)
                             }
                             return@launch
