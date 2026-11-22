@@ -96,7 +96,7 @@ object WebSearch {
      */
     // v10.131：从用户原话提取具体型号（Pura 90 / Mate 70 / Nova 12 / 畅享 100 / Pura 80 Ultra）。
     //   型号是最精准的检索实体，"那pura90呢"这类追问应直接搜型号，模型常凭训练知识答套话/幻觉。
-    private val MODEL_RE = Regex("([Pp]ura|mate|nova|畅享|荣耀|小米|iPhone|苹果)\\s?[A-Za-z]?\\s?\\d+")
+    private val MODEL_RE = Regex("([Pp]ura|mate|nova|畅享|荣耀|小米|iPhone|苹果)\\s?[A-Za-z]?\\s?(\\d+)")
     private fun extractModel(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
         val m = MODEL_RE.find(raw) ?: return null
