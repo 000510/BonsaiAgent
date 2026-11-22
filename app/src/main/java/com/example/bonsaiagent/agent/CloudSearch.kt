@@ -50,6 +50,36 @@ object CloudSearch {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    // v10.137：拉模型列表 / 测连通用的短超时客户端（不让界面干等 90s）
+    private val probeClient = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(18, TimeUnit.SECONDS)
+        .build()
+
+    /**
+     * v10.137：从云端拉该站可用模型（OpenAI 兼容 GET /models）。
+     * 成功返回模型 id 列表（已排序）；不支持 / 网络失败 / 401 返回 null（调用方回退默认列表）。
+     */
+    fun fetchModels(baseUrl: String, apiKey: String): List<String>? {
+        return try {
+            val req = Request.Builder()
+                .url(baseUrl.trimEnd('/') + "/models")
+                .header("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+            val resp = probeClient.newCall(req).execute()
+            val text = resp.body?.string() ?: return null
+            if (!resp.isSuccessful) return null
+            val data = JSONObject(text).optJSONArray("data") ?: return null
+            val out = ArrayList<String>()
+            for (i in 0 until data.length()) {
+                val id = data.optJSONObject(i)?.optString("id") ?: continue
+                if (id.isNotBlank()) out.add(id)
+            }
+            out.sorted()
+        } catch (e: Exception) { null }
+    }
+
     private val SYS = """
 你是手机上的个人助理，回答一律用简洁中文。
 只有当问题需要「实时 / 最新 / 尚未掌握」的信息时，才调用 web_search 工具
@@ -64,7 +94,7 @@ object CloudSearch {
      * exhausted=true 表示「本站额度用尽 / 限流」——这类错误靠继续重试没用，
      * 只能切换中转站。云端返回 401/402/429 或报错文案含额度关键词时置 true。
      */
-    data class ChatResult(val content: String, val tokens: Int, val exhausted: Boolean = false)
+    data class ChatResult(val content: String, val tokens: Int, val exhausted: Boolean = false, val failed: Boolean = false)
 
     /**
      * 一次云端对话：模型自己决定是否 web_search（function calling）。
@@ -107,7 +137,7 @@ object CloudSearch {
                 .post(body.toString().toRequestBody("application/json".toMediaType()))
                 .build()
             val resp = client.newCall(req).execute()
-            val text = resp.body?.string() ?: return ChatResult("（云端无响应）", totalTokens)
+            val text = resp.body?.string() ?: return ChatResult("（云端无响应）", totalTokens, failed = true)
             if (!resp.isSuccessful) {
                 // v10.136：区分「额度用尽/限流」与其它错误——额度问题只能靠换中转站解决
                 val errMsg = try {
@@ -121,19 +151,19 @@ object CloudSearch {
                         t.contains("未开通") || t.contains("余额")
                 }
                 return ChatResult("（云端报错 ${resp.code}${if (errMsg.isNotBlank()) " $errMsg" else ""}）",
-                    totalTokens, exhausted = ex)
+                    totalTokens, exhausted = ex, failed = true)
             }
             val j = JSONObject(text)
             // v10.136：有些网关把错误塞进 200 响应体，也要识别成额度问题
             j.optJSONObject("error")?.let { err ->
                 return ChatResult("（云端报错：${err.optString("message", "")}）",
-                    totalTokens, exhausted = true)
+                    totalTokens, exhausted = true, failed = true)
             }
             j.optJSONObject("usage")?.let { u ->
                 totalTokens += u.optInt("prompt_tokens") + u.optInt("completion_tokens")
             }
             val msg = j.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
-                ?: return ChatResult("（云端无消息）", totalTokens)
+                ?: return ChatResult("（云端无消息）", totalTokens, failed = true)
             val tcs = msg.optJSONArray("tool_calls")
             if (tcs != null && tcs.length() > 0) {
                 // 模型决定要搜索：本地抓 Bing，喂回 tool 结果
@@ -157,6 +187,6 @@ object CloudSearch {
                 return ChatResult(msg.optString("content"), totalTokens)
             }
         }
-        return ChatResult("（搜索循环超限）", totalTokens)
+        return ChatResult("（搜索循环超限）", totalTokens, failed = true)
     }
 }

@@ -19,6 +19,7 @@ import com.example.bonsaiagent.agent.RouteResult
 import com.example.bonsaiagent.agent.WebSearch
 import com.example.bonsaiagent.api.LocalApiServer
 import com.example.bonsaiagent.data.AgentSettings
+import com.example.bonsaiagent.data.CloudProvider
 import com.example.bonsaiagent.data.MemoryFact
 import com.example.bonsaiagent.data.MemoryStore
 import com.example.bonsaiagent.data.SettingsStore
@@ -1730,22 +1731,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun runCloudChat(ai: ChatMessage, msg: String) {
         val s = settings.value
-        val key = when (s.cloudProvider) {
-            "st" -> s.stKey
-            "r77625" -> s.r77625Key
-            else -> s.xlhKey
-        }
+        val prov = s.providers.firstOrNull { it.id == s.cloudProvider } ?: s.providers.firstOrNull()
+        val key = prov?.key ?: ""
+        val baseUrl = prov?.baseUrl ?: ""
         lastCloudMsg = msg
         genStatus.value = GenStatus(phase = "云端思考中...")
         viewModelScope.launch(Dispatchers.IO) {
-            val prov = CloudSearch.provider(settings.value.cloudProvider)
             val history = agentMessages
                 .filter { it.role == "user" || it.role == "assistant" }
                 .filter { !it.content.value.isNullOrBlank() }
                 .takeLast(8)
                 .map { it.role to it.content.value }
             val res = try {
-                CloudSearch.chat(prov.baseUrl, key, settings.value.cloudModel, history, msg)
+                CloudSearch.chat(baseUrl, key, settings.value.cloudModel, history, msg)
             } catch (e: Exception) { CloudSearch.ChatResult("（云端出错：${e.message}）", 0) }
             // v10.135：累加云端 token（跨天重置），供 Agent 页余量面板 + 使用提醒
             if (res.tokens > 0) {
@@ -1758,7 +1756,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             mainHandler.post {
                 // v10.136：额度耗尽 → 底部气泡（气泡里点站名即可切过去续跑）
-                quotaBlocked.value = res.exhausted
+                quotaBlocked.value = res.failed
+                lastCloudError.value = if (res.failed) res.content else ""
                 val budget = settings.value.tokenBudget
                 val used = settings.value.tokenUsed
                 var reply = res.content
@@ -1777,14 +1776,77 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** v10.136：额度耗尽气泡里点某个中转站 → 切过去，并原地续跑刚才那条（不重复发用户消息） */
     fun retryCloudWith(pid: String) {
         if (pid == settings.value.cloudProvider) return
-        val p = CloudSearch.provider(pid)
-        updateSettings(settings.value.copy(cloudProvider = pid, cloudModel = p.defaultModel))
+        val p = settings.value.providers.firstOrNull { it.id == pid } ?: return
+        val m = p.defaultModel.ifBlank { p.models.firstOrNull() ?: settings.value.cloudModel }
+        updateSettings(settings.value.copy(cloudProvider = pid, cloudModel = m))
         quotaBlocked.value = false
         val msg = lastCloudMsg
         if (msg.isBlank()) return
         val ai = agentMessages.lastOrNull { it.role == "assistant" } ?: return
-        ai.content.value = "（切换到「${p.label}」重试中…）"
+        ai.content.value = "（切换到「${p.name}」重试中…）"
         runCloudChat(ai, msg)
+    }
+
+    // v10.137：中转站管理 + 连通探测
+    val probeState = mutableStateOf<Map<String, String>>(emptyMap())
+    // v10.137：最近一次云端失败原因，气泡里展示
+    val lastCloudError = mutableStateOf("")
+
+    /** 新增中转站，并立即测一次连通 */
+    fun addProvider(name: String, baseUrl: String, key: String) {
+        val id = "u" + System.currentTimeMillis().toString().takeLast(9)
+        val np = CloudProvider(id, name.trim().ifBlank { baseUrl.trim() }, baseUrl.trim(), key.trim(), emptyList(), "")
+        updateSettings(settings.value.copy(providers = settings.value.providers + np))
+        probeProvider(id)
+    }
+
+    fun removeProvider(id: String) {
+        val list = settings.value.providers
+        if (list.size <= 1) return
+        val rest = list.filterNot { it.id == id }
+        var cp = settings.value.cloudProvider
+        if (cp == id) cp = rest.first().id
+        probeState.value = probeState.value - id
+        updateSettings(settings.value.copy(providers = rest, cloudProvider = cp))
+    }
+
+    fun renameProvider(id: String, newName: String) {
+        val cur = settings.value.providers.map { if (it.id == id) it.copy(name = newName) else it }
+        updateSettings(settings.value.copy(providers = cur))
+    }
+
+    fun setProviderKey(id: String, key: String) {
+        val cur = settings.value.providers.map { if (it.id == id) it.copy(key = key) else it }
+        updateSettings(settings.value.copy(providers = cur))
+    }
+
+    fun selectProvider(id: String) {
+        val p = settings.value.providers.firstOrNull { it.id == id } ?: return
+        val m = p.defaultModel.ifBlank { p.models.firstOrNull() ?: settings.value.cloudModel }
+        updateSettings(settings.value.copy(cloudProvider = id, cloudModel = m))
+        quotaBlocked.value = false
+    }
+
+    /** v10.137：测连通 + 拉模型列表（GET /models）。成功→顺畅并更新该站模型；失败→不通+原因。 */
+    fun probeProvider(id: String) {
+        val p = settings.value.providers.firstOrNull { it.id == id } ?: return
+        if (p.baseUrl.isBlank()) { probeState.value = probeState.value + (id to "未填地址"); return }
+        if (p.key.isBlank()) { probeState.value = probeState.value + (id to "未填 Key"); return }
+        probeState.value = probeState.value + (id to "检测中…")
+        viewModelScope.launch(Dispatchers.IO) {
+            val models = CloudSearch.fetchModels(p.baseUrl, p.key)
+            mainHandler.post {
+                if (models != null) {
+                    probeState.value = probeState.value + (id to "✓ 通畅（${models.size} 个模型）")
+                    val cur = settings.value.providers.map {
+                        if (it.id == id) it.copy(models = models, defaultModel = it.defaultModel.ifBlank { models.firstOrNull() ?: "" }) else it
+                    }
+                    updateSettings(settings.value.copy(providers = cur))
+                } else {
+                    probeState.value = probeState.value + (id to "✗ 不通（检查地址/Key/网络）")
+                }
+            }
+        }
     }
 
     /** 页面2：混合路由 + Agent 执行 */

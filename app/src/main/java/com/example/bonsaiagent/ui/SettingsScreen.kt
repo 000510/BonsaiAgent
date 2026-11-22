@@ -310,7 +310,7 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall)
         }
 
-        // v10.134：云端根治（function calling）——模型自己判断要不要联网搜，不再靠本地词表猜。
+        // v10.137：云端根治 + 中转站管理（可增删改名 + 测连通 + 模型云端拉取）
         Spacer(Modifier.height(16.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("云端根治（模型自判搜索）", style = MaterialTheme.typography.bodyMedium,
@@ -318,39 +318,9 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
             Switch(checked = s.cloudEnabled,
                 onCheckedChange = { vm.updateSettings(s.copy(cloudEnabled = it)) })
         }
-        Text("开=对话交给云端模型，它自己判断要不要联网搜。需填下方所选站的 Key。",
+        Text("开=对话交给云端模型，它自己判断要不要联网搜。",
             style = MaterialTheme.typography.bodySmall)
-        val prov = CloudSearch.provider(s.cloudProvider)
-        Text("中转站", style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(top = 8.dp))
-        ProviderDropdown(current = s.cloudProvider, onSelect = { pid ->
-            val p = CloudSearch.provider(pid)
-            vm.updateSettings(s.copy(cloudProvider = pid, cloudModel = p.defaultModel))
-        })
-        Text("模型", style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(top = 8.dp))
-        ProviderModelDropdown(current = s.cloudModel, options = prov.models,
-            onSelect = { vm.updateSettings(s.copy(cloudModel = it)) })
-        val curKey = when (s.cloudProvider) {
-            "st" -> s.stKey
-            "r77625" -> s.r77625Key
-            else -> s.xlhKey
-        }
-        OutlinedTextField(
-            value = curKey,
-            onValueChange = { v ->
-                vm.updateSettings(when (s.cloudProvider) {
-                    "st" -> s.copy(stKey = v)
-                    "r77625" -> s.copy(r77625Key = v)
-                    else -> s.copy(xlhKey = v)
-                })
-            },
-            label = { Text("${prov.label} API Key") },
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            singleLine = true
-        )
-        Text("换站会自动切模型；Key 各站独立保存。77625 每分钟 5 次限流较慢，建议主力用小力孩。",
-            style = MaterialTheme.typography.bodySmall)
+        CloudProviderSection(vm, s)
 
         // v10.135：每日云端 Token 上限设置
         Text("每日云端 Token 上限（今日已用 ${s.tokenUsed}）",
@@ -503,5 +473,127 @@ private fun ProviderModelDropdown(current: String, options: List<String>,
                 })
             }
         }
+    }
+}
+
+
+/**
+ * v10.137：中转站管理。可增删改名、点选当前站、测连通（顺带从云端拉真实模型列表）。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CloudProviderSection(vm: MainViewModel, s: AgentSettings) {
+    var showAdd by remember { mutableStateOf(false) }
+    var renameId by remember { mutableStateOf<String?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var newName by remember { mutableStateOf("") }
+    var newUrl by remember { mutableStateOf("") }
+    var newKey by remember { mutableStateOf("") }
+
+    Text("中转站（可加 / 删 / 改名，「选」设为当前）",
+        style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp))
+
+    s.providers.forEach { p ->
+        val isCur = s.cloudProvider == p.id
+        val probe = vm.probeState.value[p.id]
+        Column(
+            Modifier.fillMaxWidth()
+                .padding(vertical = 4.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    if (isCur) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                    else Color.Transparent
+                )
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    p.name + if (isCur) "（当前）" else "",
+                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (!isCur) TextButton(onClick = { vm.selectProvider(p.id) }) { Text("选", fontSize = 12.sp) }
+                TextButton(onClick = { renameId = p.id; renameText = p.name }) { Text("改名", fontSize = 12.sp) }
+                TextButton(onClick = { vm.probeProvider(p.id) }) { Text("测连通", fontSize = 12.sp) }
+                if (s.providers.size > 1)
+                    TextButton(onClick = { vm.removeProvider(p.id) }) {
+                        Text("删", fontSize = 12.sp, color = Color(0xFFDC2626))
+                    }
+            }
+            Text(p.baseUrl.ifBlank { "（未填地址）" }, fontSize = 11.sp, color = Color(0xFF6B7280))
+            if (probe != null) {
+                val ok = probe.startsWith("✓")
+                val bad = probe.startsWith("✗")
+                Text(probe, fontSize = 11.sp,
+                    color = if (ok) Color(0xFF16A34A) else if (bad) Color(0xFFDC2626) else Color(0xFF6B7280))
+            }
+        }
+    }
+
+    Spacer(Modifier.height(6.dp))
+    OutlinedButton(onClick = { newName = ""; newUrl = ""; newKey = ""; showAdd = true },
+        modifier = Modifier.fillMaxWidth()) { Text("＋ 添加中转站") }
+
+    val cur = s.providers.firstOrNull { it.id == s.cloudProvider } ?: s.providers.firstOrNull()
+    if (cur != null) {
+        Text("当前站（${cur.name}）API Key", style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 10.dp))
+        OutlinedTextField(
+            value = cur.key,
+            onValueChange = { vm.setProviderKey(cur.id, it) },
+            modifier = Modifier.fillMaxWidth(), singleLine = true
+        )
+        Text("模型", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        val opts = cur.models.ifEmpty { listOf(cur.defaultModel).filter { it.isNotBlank() } }
+        if (opts.isNotEmpty()) {
+            ProviderModelDropdown(current = s.cloudModel, options = opts,
+                onSelect = { vm.updateSettings(s.copy(cloudModel = it)) })
+        }
+    }
+    Text("「测连通」会拉取该站真实模型列表（GET /models）；云端加了新模型，这里就能选到。",
+        style = MaterialTheme.typography.bodySmall)
+
+    if (showAdd) {
+        AlertDialog(
+            onDismissRequest = { showAdd = false },
+            title = { Text("添加中转站") },
+            text = {
+                Column {
+                    OutlinedTextField(value = newName, onValueChange = { newName = it },
+                        label = { Text("名称（如：我的站）") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = newUrl, onValueChange = { newUrl = it },
+                        label = { Text("接口地址（…/v1 结尾）") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+                    OutlinedTextField(value = newKey, onValueChange = { newKey = it },
+                        label = { Text("API Key") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (newUrl.isNotBlank()) { vm.addProvider(newName, newUrl, newKey); showAdd = false }
+                }) { Text("添加") }
+            },
+            dismissButton = { TextButton(onClick = { showAdd = false }) { Text("取消") } }
+        )
+    }
+
+    val rid = renameId
+    if (rid != null) {
+        AlertDialog(
+            onDismissRequest = { renameId = null },
+            title = { Text("重命名中转站") },
+            text = {
+                OutlinedTextField(value = renameText, onValueChange = { renameText = it },
+                    label = { Text("名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (renameText.isNotBlank()) { vm.renameProvider(rid, renameText.trim()); renameId = null }
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { renameId = null }) { Text("取消") } }
+        )
     }
 }

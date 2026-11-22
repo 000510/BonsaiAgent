@@ -8,6 +8,26 @@ import android.content.SharedPreferences
  * 最大输出 2048 / 温度 0.30 / Top-K 40 / Top-P 0.95 / 重复惩罚 1.00 /
  * 上下文 8192 / 推理线程 8。
  */
+/** v10.137：用户可管理的中转站（可增删改，存 JSON 到 SharedPreferences） */
+data class CloudProvider(
+    val id: String,
+    val name: String,
+    val baseUrl: String,
+    val key: String,
+    val models: List<String> = emptyList(),
+    val defaultModel: String = ""
+)
+
+/** 内置 3 站的默认模板（key 为空，load 时由旧字段 xlhKey/r77625Key/stKey 迁移填充） */
+val DEFAULT_PROVIDERS: List<CloudProvider> = listOf(
+    CloudProvider("xlh", "小力孩", "https://www.ygxnhzy.cn/v1", "",
+        listOf("DeepSeek-V4.1-Flash 小力孩AI"), "DeepSeek-V4.1-Flash 小力孩AI"),
+    CloudProvider("r77625", "77625路由站", "https://ly.77625.xyz/v1", "",
+        listOf("x-deepseek-v4.1-flash", "gemini-3.8-flash"), "x-deepseek-v4.1-flash"),
+    CloudProvider("st", "商汤SenseNova", "https://token.sensenova.cn/v1", "",
+        listOf("sensenova-6.8-flash-lite", "deepseek-flash", "glm-5.3", "kimi-k3"), "sensenova-6.8-flash-lite")
+)
+
 data class AgentSettings(
     val maxTokens: Int = 2048,
     val temperature: Float = 0.70f,
@@ -63,7 +83,10 @@ data class AgentSettings(
     // tokenDate=记录日（跨天自动重置）。
     val tokenBudget: Int = 2000000,
     val tokenUsed: Int = 0,
-    val tokenDate: String = ""
+    val tokenDate: String = "",
+
+    // v10.137：用户可管理的中转站列表（可增删改名）。空=首次，load 时用默认 3 站+迁移旧 key。
+    val providers: List<CloudProvider> = emptyList()
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述、不要夹英文。
@@ -197,8 +220,55 @@ class SettingsStore(context: Context) {
         r77625Key = sp.getString("r77625Key", "") ?: "",
         tokenBudget = sp.getInt("tokenBudget", 2000000),
         tokenUsed = sp.getInt("tokenUsed", 0),
-        tokenDate = sp.getString("tokenDate", "") ?: ""
+        tokenDate = sp.getString("tokenDate", "") ?: "",
+        providers = loadProviders()
     )
+
+    /** v10.137：读中转站列表；首次用默认 3 站并迁移旧 key，不丢用户已填的 key。 */
+    private fun loadProviders(): List<CloudProvider> {
+        val raw = sp.getString("providers", "") ?: ""
+        if (raw.isNotBlank()) {
+            try {
+                val arr = org.json.JSONArray(raw)
+                val out = ArrayList<CloudProvider>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id")
+                    if (id.isBlank()) continue
+                    val modelsArr = o.optJSONArray("models")
+                    val models = ArrayList<String>()
+                    if (modelsArr != null) for (j in 0 until modelsArr.length()) models.add(modelsArr.optString(j))
+                    out.add(CloudProvider(
+                        id = id,
+                        name = o.optString("name", id),
+                        baseUrl = o.optString("baseUrl", ""),
+                        key = o.optString("key", ""),
+                        models = models,
+                        defaultModel = o.optString("defaultModel", models.firstOrNull() ?: "")
+                    ))
+                }
+                if (out.isNotEmpty()) return out
+            } catch (_: Throwable) {}
+        }
+        val legacy = mapOf(
+            "xlh" to (sp.getString("xlhKey", "") ?: ""),
+            "r77625" to (sp.getString("r77625Key", "") ?: ""),
+            "st" to (sp.getString("stKey", "") ?: "")
+        )
+        return DEFAULT_PROVIDERS.map { it.copy(key = legacy[it.id] ?: it.key) }
+    }
+
+    private fun providersToJson(list: List<CloudProvider>): String {
+        val arr = org.json.JSONArray()
+        list.forEach { p ->
+            val o = org.json.JSONObject()
+            o.put("id", p.id); o.put("name", p.name); o.put("baseUrl", p.baseUrl)
+            o.put("key", p.key); o.put("defaultModel", p.defaultModel)
+            o.put("models", org.json.JSONArray(p.models))
+            arr.put(o)
+        }
+        return arr.toString()
+    }
 
     fun save(s: AgentSettings) {
         sp.edit().apply {
@@ -235,6 +305,7 @@ class SettingsStore(context: Context) {
             putInt("tokenBudget", s.tokenBudget)
             putInt("tokenUsed", s.tokenUsed)
             putString("tokenDate", s.tokenDate)
+            putString("providers", providersToJson(s.providers))
         }.apply()
     }
 }

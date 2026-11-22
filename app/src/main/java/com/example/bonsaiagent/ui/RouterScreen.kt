@@ -134,90 +134,68 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
  * 液态玻璃外观：四角圆弧 + 半透明白渐变 + 顶部高光亮边 + 细白边框 + 投影。
  * 展开后列出所有中转站，点一下切过去，并把刚才那条任务原地续跑（不用重打一遍）。
  */
+
 @Composable
 private fun GlassQuotaBubble(vm: MainViewModel, modifier: Modifier = Modifier) {
     var expanded by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(26.dp)
-    Column(
+    LiquidGlassCard(
         modifier = modifier
             .fillMaxWidth()
             .imePadding()
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp)
-            .clip(shape)
-            .shadow(14.dp, shape, ambientColor = Color(0x33000000))
-            .background(
-                Brush.linearGradient(
-                    listOf(Color(0xF5FFFFFF), Color(0xC4EAF2FF))
-                )
-            )
-            .border(1.dp, Color.White.copy(alpha = 0.78f), shape)
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp),
+        gradient = listOf(Color(0xFFEAF2FF), Color(0xFFF1EAFF), Color(0xFFE6F7FF))
     ) {
-        // 顶部一道高光亮边（玻璃反光感）
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(2.dp)
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(
-                            Color.White.copy(alpha = 0f),
-                            Color.White.copy(alpha = 0.95f),
-                            Color.White.copy(alpha = 0f)
-                        )
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("⚠️", fontSize = 16.sp)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("云端调用失败，请切换中转站",
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF111111))
+                    val err = vm.lastCloudError.value
+                    Text(
+                        if (err.isNotBlank()) err.take(90) else "点下面任一站，自动继续刚才的任务",
+                        fontSize = 11.sp, color = Color(0xFF6B7280)
                     )
-                )
-        )
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("⚠️", fontSize = 16.sp)
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text("您的本站额度已用完，请切换中转站",
-                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF111111))
-                Text("点下面任一中转站，自动继续刚才的任务",
-                    fontSize = 11.sp, color = Color(0xFF6B7280))
+                }
+                TextButton(onClick = { expanded = !expanded }) {
+                    Text(if (expanded) "收起" else "展开",
+                        fontSize = 12.sp, color = Color(0xFF4D6BFE), fontWeight = FontWeight.SemiBold)
+                }
             }
-            TextButton(onClick = { expanded = !expanded }) {
-                Text(if (expanded) "收起" else "展开",
-                    fontSize = 12.sp, color = Color(0xFF4D6BFE), fontWeight = FontWeight.SemiBold)
-            }
-        }
-        if (expanded) {
-            val st = vm.settings.value
-            Column(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 10.dp)) {
-                CloudSearch.PROVIDERS.forEach { p ->
-                    val isCur = st.cloudProvider == p.id
-                    val hasKey = when (p.id) {
-                        "st" -> st.stKey.isNotBlank()
-                        "r77625" -> st.r77625Key.isNotBlank()
-                        else -> st.xlhKey.isNotBlank()
-                    }
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(
-                                if (isCur) Color(0xFF4D6BFE).copy(alpha = 0.10f) else Color.Transparent
-                            )
-                            .clickable { vm.retryCloudWith(p.id) }
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(p.label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                            color = if (isCur) Color(0xFF4D6BFE) else Color(0xFF111111))
-                        Spacer(Modifier.weight(1f))
-                        val tip = when {
-                            isCur -> "当前站"
-                            !hasKey -> "未填Key"
-                            else -> "点此切换"
+            if (expanded) {
+                val st = vm.settings.value
+                Column(Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 4.dp)) {
+                    st.providers.forEach { p ->
+                        val isCur = st.cloudProvider == p.id
+                        val hasKey = p.key.isNotBlank()
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (isCur) Color(0xFF4D6BFE).copy(alpha = 0.10f)
+                                    else Color.Transparent
+                                )
+                                .clickable { if (!isCur && hasKey) vm.retryCloudWith(p.id) }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(p.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                                color = if (isCur) Color(0xFF4D6BFE) else Color(0xFF111111))
+                            Spacer(Modifier.weight(1f))
+                            val tip = when {
+                                isCur -> "当前站"
+                                !hasKey -> "未填Key"
+                                else -> "点此切换"
+                            }
+                            Text(tip, fontSize = 11.sp,
+                                color = if (isCur) Color(0xFF4D6BFE)
+                                else if (hasKey) Color(0xFF16A34A) else Color(0xFFDC2626))
                         }
-                        Text(tip, fontSize = 11.sp,
-                            color = if (isCur) Color(0xFF4D6BFE)
-                            else if (hasKey) Color(0xFF16A34A) else Color(0xFFDC2626))
                     }
                 }
             }
