@@ -46,7 +46,18 @@ data class AgentSettings(
 
     // v10.85：上次成功加载的主模型路径。打开 App 时优先恢复它，
     // 不再靠「猜」——之前按最新导入或体积最大猜，都会误选到别的模型。
-    val lastModelPath: String = ""
+    val lastModelPath: String = "",
+
+    // v10.134：云端根治（function calling）。
+    // cloudEnabled 开=发送走云端模型，模型自己判断要不要联网搜（不再靠本地词表猜）。
+    // cloudProvider 选中转站 id（CloudSearch.PROVIDERS），cloudModel 选中该站的模型。
+    // 三个中转站各存一个 key（商汤/小力孩/77625），换站取对应 key。
+    val cloudEnabled: Boolean = false,
+    val cloudProvider: String = "xlh",
+    val cloudModel: String = "DeepSeek-V4.1-Flash 小力孩AI",
+    val stKey: String = "",
+    val xlhKey: String = "",
+    val r77625Key: String = ""
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述、不要夹英文。
@@ -170,7 +181,14 @@ class SettingsStore(context: Context) {
         apiEnabled = sp.getBoolean("apiEnabled", false),
         deepseekKey = sp.getString("deepseekKey", "") ?: "",
         apiBase = sp.getString("apiBase", "https://api.deepseek.com") ?: "https://api.deepseek.com",
-        allowDangerous = sp.getBoolean("allowDangerous", false)
+        allowDangerous = sp.getBoolean("allowDangerous", false),
+        cloudEnabled = sp.getBoolean("cloudEnabled", false),
+        cloudProvider = sp.getString("cloudProvider", "xlh") ?: "xlh",
+        cloudModel = sp.getString("cloudModel", "DeepSeek-V4.1-Flash 小力孩AI")
+            ?: "DeepSeek-V4.1-Flash 小力孩AI",
+        stKey = sp.getString("stKey", "") ?: "",
+        xlhKey = sp.getString("xlhKey", "") ?: "",
+        r77625Key = sp.getString("r77625Key", "") ?: ""
     )
 
     fun save(s: AgentSettings) {
@@ -199,6 +217,12 @@ class SettingsStore(context: Context) {
             putString("deepseekKey", s.deepseekKey)
             putString("apiBase", s.apiBase)
             putBoolean("allowDangerous", s.allowDangerous)
+            putBoolean("cloudEnabled", s.cloudEnabled)
+            putString("cloudProvider", s.cloudProvider)
+            putString("cloudModel", s.cloudModel)
+            putString("stKey", s.stKey)
+            putString("xlhKey", s.xlhKey)
+            putString("r77625Key", s.r77625Key)
         }.apply()
     }
 }

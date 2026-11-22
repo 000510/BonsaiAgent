@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import com.example.bonsaiagent.MainViewModel
 import com.example.bonsaiagent.llm.ModelLoader
 import com.example.bonsaiagent.data.AgentSettings
+import com.example.bonsaiagent.agent.CloudSearch
 
 /**
  * v10.94：设置页重整。
@@ -309,6 +310,48 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall)
         }
 
+        // v10.134：云端根治（function calling）——模型自己判断要不要联网搜，不再靠本地词表猜。
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("云端根治（模型自判搜索）", style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f))
+            Switch(checked = s.cloudEnabled,
+                onCheckedChange = { vm.updateSettings(s.copy(cloudEnabled = it)) })
+        }
+        Text("开=对话交给云端模型，它自己判断要不要联网搜。需填下方所选站的 Key。",
+            style = MaterialTheme.typography.bodySmall)
+        val prov = CloudSearch.provider(s.cloudProvider)
+        Text("中转站", style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 8.dp))
+        ProviderDropdown(current = s.cloudProvider, onSelect = { pid ->
+            val p = CloudSearch.provider(pid)
+            vm.updateSettings(s.copy(cloudProvider = pid, cloudModel = p.defaultModel))
+        })
+        Text("模型", style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 8.dp))
+        ProviderModelDropdown(current = s.cloudModel, options = prov.models,
+            onSelect = { vm.updateSettings(s.copy(cloudModel = it)) })
+        val curKey = when (s.cloudProvider) {
+            "st" -> s.stKey
+            "r77625" -> s.r77625Key
+            else -> s.xlhKey
+        }
+        OutlinedTextField(
+            value = curKey,
+            onValueChange = { v ->
+                vm.updateSettings(when (s.cloudProvider) {
+                    "st" -> s.copy(stKey = v)
+                    "r77625" -> s.copy(r77625Key = v)
+                    else -> s.copy(xlhKey = v)
+                })
+            },
+            label = { Text("${prov.label} API Key") },
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            singleLine = true
+        )
+        Text("换站会自动切模型；Key 各站独立保存。77625 每分钟 5 次限流较慢，建议主力用小力孩。",
+            style = MaterialTheme.typography.bodySmall)
+
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -389,6 +432,49 @@ private fun SourceDropdown(current: String, onSelect: (String) -> Unit) {
             value = current,
             onValueChange = {},
             readOnly = true,
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach {
+                DropdownMenuItem(text = { Text(it) }, onClick = {
+                    onSelect(it); expanded = false
+                })
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProviderDropdown(current: String, onSelect: (String) -> Unit) {
+    val opts = CloudSearch.PROVIDERS
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+        OutlinedTextField(
+            value = opts.firstOrNull { it.id == current }?.label ?: current,
+            onValueChange = {}, readOnly = true,
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            opts.forEach {
+                DropdownMenuItem(text = { Text(it.label) }, onClick = {
+                    onSelect(it.id); expanded = false
+                })
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProviderModelDropdown(current: String, options: List<String>,
+                                  onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+        OutlinedTextField(
+            value = current, onValueChange = {}, readOnly = true,
             modifier = Modifier.menuAnchor().fillMaxWidth(),
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
         )

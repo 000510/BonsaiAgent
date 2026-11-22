@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.bonsaiagent.agent.Actions
 import com.example.bonsaiagent.agent.AppIndex
 import com.example.bonsaiagent.agent.CloudClient
+import com.example.bonsaiagent.agent.CloudSearch
 import com.example.bonsaiagent.agent.Executor
 import com.example.bonsaiagent.agent.FastRoute
 import com.example.bonsaiagent.agent.Router
@@ -1769,6 +1770,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             genStatus.value = GenStatus(phase = "就绪")
             return
+        }
+
+        // v10.134：云端根治——模型自判搜索。开启且所选站 Key 非空时，对话直接交给云端。
+        // 模型自己判断要不要联网（function calling），本地词表整个退役为回退。
+        if (s.cloudEnabled) {
+            val prov = CloudSearch.provider(s.cloudProvider)
+            val key = when (s.cloudProvider) {
+                "st" -> s.stKey
+                "r77625" -> s.r77625Key
+                else -> s.xlhKey
+            }
+            if (key.isNotBlank()) {
+                genStatus.value = GenStatus(phase = "云端思考中...")
+                viewModelScope.launch(Dispatchers.IO) {
+                    val history = agentMessages
+                        .filter { it.role == "user" || it.role == "assistant" }
+                        .filter { !it.content.value.isNullOrBlank() }
+                        .takeLast(8)
+                        .map { it.role to it.content.value }
+                    val out = try {
+                        CloudSearch.chat(prov.baseUrl, key, s.cloudModel, history, msg)
+                    } catch (e: Exception) { "（云端出错：${e.message}）" }
+                    mainHandler.post {
+                        ai.content.value = out
+                        genStatus.value = GenStatus(phase = "就绪")
+                    }
+                    genLock.set(false)
+                }
+                return
+            }
         }
 
         // v8.0：把 prompt 拆成"固定前缀"和"变化部分"。
