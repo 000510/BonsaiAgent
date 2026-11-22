@@ -142,7 +142,7 @@ private fun GlassQuotaBubble(vm: MainViewModel, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .imePadding()
-            .padding(horizontal = 12.dp, bottom = 104.dp, top = 8.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp)
             .clip(shape)
             .shadow(14.dp, shape, ambientColor = Color(0x33000000))
             .background(
