@@ -100,6 +100,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
     val modelLoaded = mutableStateOf(Llama.isLoaded())
 
+    // v10.133【方案② 话题锚点】最近一次信息检索的话题词（如"华为手机 最新"）。
+    //   指代/无关键词追问（"那它呢/电池呢"）没有检索词，模型自己不触发搜索（B组盲区），
+    //   用 lastTopic 把追问续接到上文话题上，再走确定性搜索通道。搜索成功即更新。
+    private var lastTopic: String? = null
+
     // v10.87：结构化记忆 —— 关于用户的长期事实，每轮只挑相关的几条塞进 prompt
     val memories = mutableStateListOf<MemoryFact>()
     val pendingFact = mutableStateOf<MemoryFact?>(null)
@@ -1831,14 +1836,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // v10.126【修复】信息检索类意图强制搜索：4B 对"华为手机最新机型是哪个/搜一下"不稳定
             //   产出 search 动作，不触发 WebSearch 就凭训练知识答（Mate 60 过时/"我无法联网"/
             //   Mate 90 幻觉，截图实测）。命中 shouldSearch → 确定性搜索通道，不依赖模型路由。
-            if (WebSearch.shouldSearch(msg) && !WebSearch.isWeather(msg)) {
+            // v10.133【方案② 话题锚点】指代/无关键词追问（"那它呢/电池呢/它续航"）：
+            //   SEARCH_INTENT 不命中（B组盲区），但这类话明显在追问上文话题。若 lastTopic 存在，
+            //   就把追问续接到上文话题上一起搜，不再让模型自由答套话/幻觉。
+            val followup = !WebSearch.shouldSearch(msg) && !WebSearch.isWeather(msg)
+                    && WebSearch.isTopicFollowup(msg) && lastTopic != null
+            if ((WebSearch.shouldSearch(msg) || followup) && !WebSearch.isWeather(msg)) {
                 // v10.129【根因·AgentMore全员确认】sendAgent 的对话历史写入的是 agentMessages（只写不读），
                 //   prev 之前从 chatMessages 取——那是主对话页的独立列表，Agent 页追问时取不到上文，
                 //   导致"我是说最新一款"拼不上"华为最新手机"（v10.127/128 补丁全白打）。
                 //   必须从 agentMessages 取（Agent 页自己的历史）。
                 val prev = agentMessages.lastOrNull { it.role == "user" && it.content.value != msg }?.content?.value
                 mainHandler.post { ai.content.value = "[→ 动作] search（信息检索，自动搜索）\n" }
-                searchAndSummarize(WebSearch.withContext(WebSearch.buildQuery(msg, null), prev), ai)
+                val q = if (followup)
+                    WebSearch.withContext("$lastTopic ${WebSearch.buildQuery(msg, null)}", prev)
+                else
+                    WebSearch.withContext(WebSearch.buildQuery(msg, null), prev)
+                searchAndSummarize(q, ai)
+                lastTopic = q   // v10.133：记录本次话题，供下一轮指代追问续接
                 return@launch
             }
             when (val route = Router.parse(finalText)) {

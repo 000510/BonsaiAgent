@@ -58,6 +58,12 @@ object WebSearch {
     )
     fun shouldSearch(msg: String): Boolean = SEARCH_INTENT.containsMatchIn(msg)
 
+    // v10.133【方案② 话题锚点】指代/无关键词追问（"那它呢/电池呢/它续航/屏幕多大"）：
+    //   这类话无检索词，SEARCH_INTENT 不命中（B组盲区），但明显在追问上文话题。
+    //   词表刻意不放裸"那/它"，避免"那部电影/其他品牌"新话题误伤；"呢"结尾也认。
+    private val TOPIC_FOLLOWUP = Regex("那它|那个|它呢|它怎么|它续航|它参数|它价格|它什么|这|电池|屏幕|续航|参数|价格|什么时候|多少|呢$")
+    fun isTopicFollowup(msg: String): Boolean = TOPIC_FOLLOWUP.containsMatchIn(msg)
+
     /** 从用户原话提取城市实体；没有则返回 null（走 IP 定位） */
     fun cityOf(msg: String): String? = CITY_LIST.firstOrNull { msg.contains(it) }
 
