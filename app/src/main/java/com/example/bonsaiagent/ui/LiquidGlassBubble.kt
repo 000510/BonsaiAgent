@@ -30,15 +30,21 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * v10.145：整体移植资料包 LiquidGlass-Pack-v2 的 glass.frag（MIT，画心人）。
- * 不再自研。之前 v10.137~144 自研的 AGSL（自定义尺寸自适应 / clampIn / 9 点模糊 / 暖白白边）
- * 在气泡内制造出「一圈压暗的玻璃 + 中间一块未压暗的原色」= 用户反馈的「长方形高亮」。
- * 本版把原作算法逐行移植（SDF → 法线 → 折射衰减 k=(1-t^0.3)^2 → 5 点十字模糊 →
- * 提亮 1.06+冷色 → 顶部冷渐变 → 菲涅尔边缘光 → 细白边），内部为不透明亮体（interior alpha=1），
- * 整体均匀，不会再有「中间一块原色」的矩形。
+ * v10.146：整体移植资料包 LiquidGlass-Pack-v2 的 glass.frag（MIT，画心人），
+ * 并修正 v10.145 的坐标系误判。
+ *
+ * v10.145 曾把气泡中心改成 `uRes * 0.5`，理由是「p 是 layer 局部坐标，与 boundsInParent 差一个原点」。
+ * 那是**误判**：本 shader 挂在全屏容器（matchParentSize）的 graphicsLayer 上，uRes 是全屏尺寸；
+ * 而气泡的父级正是这个全屏 Box，boundsInParent() 与 p 本就是同一坐标系。
+ * 改成 uRes*0.5 等于把玻璃画到屏幕正中央 —— 表现为「玻璃一直在中间，文字在底部动，玻璃没跟上」。
+ * v10.146 恢复 `uCenter = bubbleBounds.center`（= 气泡实际中心），玻璃随气泡位置/尺寸同步。
+ *
+ * 移植内容不变（v10.145 的算法，逐行照搬原作）：
+ *   SDF → 法线 → 折射衰减 k=(1-t^0.3)^2 → 5 点十字模糊 → 提亮 1.06+冷色 → 顶部冷渐变 →
+ *   菲涅尔边缘光 → 细白边 → alpha 合成（内部不透明）。
+ * 内部深处 k=0 输出「背景×1.06+冷色」，整片同一公式，无分段交界 → 不再有长方形高亮带。
  * 参数 = 原作参数表默认值：strength 48 / chroma 12 / blur 1.2 / band 60 / edgeW 1.5 /
  *        edgeOp 0.85 / lightAng -2.2 / light 0.35 / frost 0 / mag 1 / str 1 / tint 0（×dpr，dpr≤2）。
- * 气泡内容（文字/列表）由 [LiquidGlassCard] 叠在玻璃之上 —— 内容层不变。
  */
 @Composable
 fun Modifier.liquidRefractBackground(
@@ -61,6 +67,9 @@ fun Modifier.liquidRefractBackground(
         .graphicsLayer {
             val scale = density.density.coerceAtMost(2f)
             shader.setFloatUniform("uRes", size.width, size.height)
+            // uCenter = 气泡在全屏容器内的实际中心（boundsInParent 与该 layer 的 p 同坐标系）。
+            // 气泡位置一变（展开/收起/IME 弹出），这里跟着变 → 玻璃跟着内容走。
+            shader.setFloatUniform("uCenter", bubble.center.x, bubble.center.y)
             shader.setFloatUniform("uHalf", bubble.width / 2f, bubble.height / 2f)
             shader.setFloatUniform("uRadius", radiusPx)
             // v10.145：整体移植 Pack-v2 glass.frag。uniform 全部用原作参数表默认值（×dpr，dpr=min(devicePixelRatio,2)）：
@@ -161,6 +170,7 @@ private const val AGSL_EDGE_REFRACT = """
 // 参数 = Pack-v2 参数表默认值（×dpr，dpr=min(devicePixelRatio,2)，Kotlin 侧传入）。
 uniform shader uTex;
 uniform float2 uRes;
+uniform float2 uCenter;
 uniform float2 uHalf;
 uniform float uRadius;
 uniform float4 uP;   // (strength 折射, chroma 色散, blur 模糊px, band 折射带宽px)
@@ -185,17 +195,18 @@ float3 tap(float2 px, float2 ca) {
 }
 
 float4 glass(float2 p) {
-    // 坐标系：shader 的 p 是 layer 局部坐标 (0,0)~(w,h)，气泡中心即 uRes*0.5。
-    // （uHalf 是气泡半宽高，尺寸与坐标系原点无关，照原作传入即可。）
-    float2 cu = uRes * 0.5;
-    float d = sdRB(p - cu, uHalf, uRadius);
+    // 坐标系：本 shader 挂在**全屏容器**（matchParentSize）的 graphicsLayer 上，
+    // 所以 p 是全屏局部坐标；气泡的父级正是这个全屏 Box，
+    // 故 uCenter = bubbleBounds.center（boundsInParent()）与 p 同坐标系，可直接相减。
+    // ⚠️ 切勿用 uRes*0.5 当中心 —— uRes 是全屏尺寸，那会把玻璃画到屏幕正中央。
+    float d = sdRB(p - uCenter, uHalf, uRadius);
     if (d > 3.0) return float4(0.0);
 
     // 朝外法线（中心差分，e=1.5，与原件一致）
     float e = 1.5;
     float2 g = float2(
-        sdRB(p + float2(e, 0.0) - cu, uHalf, uRadius) - sdRB(p - float2(e, 0.0) - cu, uHalf, uRadius),
-        sdRB(p + float2(0.0, e) - cu, uHalf, uRadius) - sdRB(p - float2(0.0, e) - cu, uHalf, uRadius)
+        sdRB(p + float2(e, 0.0) - uCenter, uHalf, uRadius) - sdRB(p - float2(e, 0.0) - uCenter, uHalf, uRadius),
+        sdRB(p + float2(0.0, e) - uCenter, uHalf, uRadius) - sdRB(p - float2(0.0, e) - uCenter, uHalf, uRadius)
     );
     g = normalize(g + 0.000001);
 
@@ -204,7 +215,7 @@ float4 glass(float2 p) {
     float k = pow(1.0 - pow(t, 0.30), 2.0);
 
     float2 q = p;
-    if (uMag > 1.001) q = cu + (p - cu) / uMag;
+    if (uMag > 1.001) q = uCenter + (p - uCenter) / uMag;
     float2 refr = -g * k * uP.x * uStr;
     float2 ca = -g * k * uP.y * uStr;
     float2 bp = q + refr;
@@ -224,7 +235,7 @@ float4 glass(float2 p) {
     // 顶部冷色渐变（原件第 24 行，越往上越冷/越暗）。
     // 原件写成 smoothstep(+half.y*.35, -half.y*1.1, y)（edge0 > edge1，GLSL 里属未定义），
     // 这里改写为等价的 1-smoothstep(-half.y*1.1, +half.y*.35, y)，语义一致且在 AGSL 下行为确定。
-    col += (1.0 - smoothstep(-uHalf.y * 1.1, uHalf.y * 0.35, p.y - cu.y)) * float3(0.055, 0.075, 0.105);
+    col += (1.0 - smoothstep(-uHalf.y * 1.1, uHalf.y * 0.35, p.y - uCenter.y)) * float3(0.055, 0.075, 0.105);
 
     // 磨砂 / 着色（原件 25-26 行；默认 frost=0、tint=0 → 无效果，保留以对齐算法）
     col = mix(col, float3(0.97, 0.98, 1.0), uFrost * 0.85);
@@ -247,7 +258,7 @@ float4 glass(float2 p) {
 
 float4 main(float2 p) {
     float4 bg = uTex.eval(p);
-    if (sdRB(p - uRes * 0.5, uHalf, uRadius) > 3.0) return bg;
+    if (sdRB(p - uCenter, uHalf, uRadius) > 3.0) return bg;
     float4 a = glass(p);
     return float4(mix(bg.rgb, a.rgb, a.a), 1.0);
 }
