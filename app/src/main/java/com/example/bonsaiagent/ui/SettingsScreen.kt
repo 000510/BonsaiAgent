@@ -402,13 +402,13 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
     }
 }
 
-/** 分组标题 */
-@Composable
 /** v10.142：背景纯色预设（浅色系，避免深底深字看不清） */
 private val BG_PRESETS = listOf(
     0xFFEAF1FF, 0xFFF3E8FF, 0xFFE8F7EF, 0xFFFFF1E6, 0xFFF7F7F9, 0xFFDFE9F5
 )
 
+/** 分组标题 */
+@Composable
 private fun SectionTitle(text: String) {
     Text(text, style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.primary,
