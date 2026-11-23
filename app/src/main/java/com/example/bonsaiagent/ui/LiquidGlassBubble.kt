@@ -74,15 +74,25 @@ fun Modifier.liquidRefractBackground(
             shader.setFloatUniform("uCenter", bubble.center.x, bubble.center.y)
             shader.setFloatUniform("uHalf", bubble.width / 2f, bubble.height / 2f)
             shader.setFloatUniform("uRadius", radiusPx)
-            // 原作：bezel 26 / 最大位移 ≈35px / curve 3
-            shader.setFloatUniform("uBezel", 26.dp.toPx())
-            shader.setFloatUniform("uScale", 35f * scale)
-            shader.setFloatUniform("uCurve", 3.0f)
-            shader.setFloatUniform("uChroma", 2.0f * scale)
+            // v10.144：尺寸自适应。
+            // 原作卡片 300×190、scale=70 → 最大位移约卡片高度的 37%。
+            // 我们气泡只有 ~100~150px 高（半高 50~75px），若照抄 38×density=76px，
+            // 位移比半高还大 → 边缘采样点被推到气泡另一侧，折射彻底失真。
+            // 所以按气泡高度取比例，并设上限，保证小气泡也表现正常。
+            val h = bubble.height
+            val w = bubble.width
+            val shortSide = minOf(w, h)
+            shader.setFloatUniform("uBezel", (shortSide * 0.26f).coerceIn(10.dp.toPx(), 26.dp.toPx()))
+            shader.setFloatUniform("uScale", (shortSide * 0.17f).coerceIn(6f, 38f * scale))
+            // v10.144：色散从 2 提到 8 —— Pack-v2 参数表推荐 12，超过 20 才显假；
+            // 早期压到 2 是因为当时玻璃里全是错误叠加，现在可以按推荐值走。
+            shader.setFloatUniform("uChroma", (8f * scale).coerceAtMost(shortSide * 0.05f))
             shader.setFloatUniform("uEdgeW", 1.2f * scale)
             shader.setFloatUniform("uEdgeOp", 0.45f)   // 原作 rim 0.45
-            // v10.143：内部磨砂模糊（Pack-v2 blur 默认 6，超过 ~10 会变回普通毛玻璃）
-            shader.setFloatUniform("uBlur", 6f * scale)
+            // v10.144：uBlur 从 6 降到 2.2 —— Pack-v2 参数表原话「blur 默认 1.2，超过 3 就变回毛玻璃，建议 ≤1.5」。
+            // v10.143 用 6×scale（2 倍屏=12px）严重超标：气泡内那片背景被平均成一块均匀色，
+            // 铺在圆角矩形里就是一块「长方形高亮区」—— 用户反馈的问题。
+            shader.setFloatUniform("uBlur", 2.2f * scale)
             renderEffect = RenderEffect
                 .createRuntimeShaderEffect(shader, "uTex")
                 .asComposeRenderEffect()
@@ -199,7 +209,6 @@ uniform float2 uHalf;
 uniform float uRadius;
 uniform float uBezel;
 uniform float uScale;
-uniform float uCurve;
 uniform float uChroma;
 uniform float uEdgeW;
 uniform float uEdgeOp;
@@ -215,6 +224,15 @@ float sdScene(float2 p) {
     return sdRB(p - uCenter, uHalf, uRadius);
 }
 
+/** v10.144：把采样点夹在气泡内部。
+ *  之前只 clamp 到全屏 —— 模糊半径在 3 倍屏上会到 18px、对角 36px，
+ *  采样点跨出气泡边界，把「气泡外那些没被模糊的清晰内容」平均进来，
+ *  于是气泡中间凭空出现一块长方形亮带（用户反馈的问题就是它）。 */
+float2 clampIn(float2 q, float margin) {
+    float2 lim = max(uHalf - float2(margin), float2(1.0));
+    return uCenter + clamp(q - uCenter, -lim, lim);
+}
+
 float4 main(float2 p) {
     float d = sdScene(p);
     if (d > 2.0) return uTex.eval(p);
@@ -228,20 +246,28 @@ float4 main(float2 p) {
     g = g / max(length(g), 0.00001);
 
     float t = clamp(-d / max(uBezel, 1.0), 0.0, 1.0);
-    float m = pow(1.0 - t, uCurve);          // 原作：中间 0，越靠边越大
+    // v10.144：换用 Pack-v2 glass.frag 的衰减曲线 k = (1 - t^0.3)^2。
+    // 相比原作的 (1-t)^3，这条在边缘外沿衰减极快 —— t=0.1 处原作还有 0.73，它只剩 0.25，
+    // 折射带更「薄」、更贴边，不会往里糊成一片肉感。
+    float m = pow(1.0 - pow(t, 0.30), 2.0);
     float2 refr = -g * m * uScale;           // 朝玻璃中心推
 
     float2 base = p + refr;
     float2 ca = -g * m * uChroma;
 
-    float4 a = uTex.eval(clamp(base + ca, float2(0.0), uRes - float2(1.0)));
-    float4 c = uTex.eval(clamp(base, float2(0.0), uRes - float2(1.0)));
-    float4 b = uTex.eval(clamp(base - ca, float2(0.0), uRes - float2(1.0)));
+    // 色散与模糊的采样同样夹在气泡内，避免越界串味
+    float margin = uBlur * 2.2 + 2.0;
+    float2 bq = clampIn(base, margin);
+    float2 cq = clampIn(base, margin);
+
+    float4 a = uTex.eval(clampIn(base + ca, margin));
+    float4 c = uTex.eval(cq);
+    float4 b = uTex.eval(clampIn(base - ca, margin));
 
     float3 col = float3(a.r, c.g, b.b);
 
     // v10.143：移植 Pack-v2 glass.frag 第 21-22 行的五点模糊（原作 uP.z = blur），
-    // 并叠两层半径（bs、bs*2）让内部真正「磨砂」——上面的文字才浮得起来；
+    // 并叠两层半径（bs、bs*1.5）让内部真正「磨砂」——上面的文字才浮得起来；
     // 不模糊就是「一层透明贴纸」，字怎么调颜色都糊在背景里。
     // 只模糊内部：边缘那圈的折射要保留锐利，所以混合权重用 m（靠边 m→1 → 保留折射）。
     if (uBlur > 0.5) {
@@ -249,25 +275,26 @@ float4 main(float2 p) {
         float3 s = col * 0.0;
         float wsum = 0.0;
         // 半径 1x 十字 4 点
-        s += uTex.eval(clamp(base + float2(bs, 0.0), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
-        s += uTex.eval(clamp(base - float2(bs, 0.0), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
-        s += uTex.eval(clamp(base + float2(0.0, bs), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
-        s += uTex.eval(clamp(base - float2(0.0, bs), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
-        // 半径 2x 对角 4 点（补大颗粒，糊得更实）
-        float b2 = bs * 2.0;
-        s += uTex.eval(clamp(base + float2(b2, b2), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
-        s += uTex.eval(clamp(base + float2(b2, -b2), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
-        s += uTex.eval(clamp(base + float2(-b2, b2), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
-        s += uTex.eval(clamp(base + float2(-b2, -b2), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
+        s += uTex.eval(clampIn(bq + float2(bs, 0.0), margin)).rgb; wsum += 1.0;
+        s += uTex.eval(clampIn(bq - float2(bs, 0.0), margin)).rgb; wsum += 1.0;
+        s += uTex.eval(clampIn(bq + float2(0.0, bs), margin)).rgb; wsum += 1.0;
+        s += uTex.eval(clampIn(bq - float2(0.0, bs), margin)).rgb; wsum += 1.0;
+        // 半径 1.5x 对角 4 点（补大颗粒，糊得更实；1.5 而不是 2，免得跨度太大）
+        float b2 = bs * 1.5;
+        s += uTex.eval(clampIn(bq + float2(b2, b2), margin)).rgb; wsum += 1.0;
+        s += uTex.eval(clampIn(bq + float2(b2, -b2), margin)).rgb; wsum += 1.0;
+        s += uTex.eval(clampIn(bq + float2(-b2, b2), margin)).rgb; wsum += 1.0;
+        s += uTex.eval(clampIn(bq + float2(-b2, -b2), margin)).rgb; wsum += 1.0;
         // 中心原值权重 2，保证整体亮度不塌
         s += col * 2.0; wsum += 2.0;
         s /= wsum;
         col = mix(s, col, m);
     }
 
-    // 1.2px 细白边（原作 .rim 的 inset 1px 亮边）
+    // 白边：v10.144 改用暖白（拖拽实验台的 touchGlow 注释：纯白会发灰发蓝）
+    // 用预乘前的 alpha 混合，避免白边把边缘提亮成一整条
     float line = 1.0 - smoothstep(0.0, max(uEdgeW, 0.5), abs(d));
-    col = mix(col, float3(1.0), line * uEdgeOp);
+    col = mix(col, float3(1.0, 0.96, 0.90), line * uEdgeOp * 0.8);
 
     return float4(clamp(col, 0.0, 1.0), c.a);
 }
