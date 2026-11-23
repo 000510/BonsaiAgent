@@ -3,6 +3,8 @@ package com.example.bonsaiagent.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,6 +45,21 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
     val s = vm.settings.value
     val scroll = rememberScrollState()
     val ctx = LocalContext.current
+
+    // v10.142：选壁纸（OpenDocument 拿到的授权重启会失效，所以复制到私有目录再存路径）
+    val bgPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val p = importBackgroundImage(ctx, uri)
+            if (p != null) {
+                vm.updateSettings(vm.settings.value.copy(bgType = "image", bgImagePath = p))
+                Toast.makeText(ctx, "背景已设置", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(ctx, "这张图读不了，换一张试试", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().padding(16.dp).verticalScroll(scroll),
@@ -137,6 +154,47 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
         SliderRow("推理线程数: ${s.threads}", s.threads.toFloat(), 1f, 12f, 1f) {
             vm.updateSettings(s.copy(threads = it.toInt()))
         }
+
+        // ---------- v10.142 界面背景 ----------
+        Divider(Modifier.padding(vertical = 4.dp))
+        SectionTitle("界面背景")
+        Text(
+            "透明玻璃要「折射背后的东西」才看得出玻璃感。纯白背景下就像玻璃盖在白纸上，几乎看不见——" +
+            "选一张图片当背景，气泡边缘的折射会立刻明显。",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            BG_PRESETS.forEach { c ->
+                val sel = s.bgType == "color" && s.bgColor == c
+                Box(
+                    Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(Color(c))
+                        .border(
+                            width = if (sel) 3.dp else 1.dp,
+                            color = if (sel) MaterialTheme.colorScheme.primary else Color(0x33000000),
+                            shape = CircleShape
+                        )
+                        .clickable { vm.updateSettings(s.copy(bgType = "color", bgColor = c)) }
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { bgPicker.launch(arrayOf("image/*")) }) { Text("选一张图片") }
+            OutlinedButton(onClick = {
+                vm.updateSettings(s.copy(bgType = "none", bgImagePath = ""))
+            }) { Text("恢复默认") }
+        }
+        Text(
+            when (s.bgType) {
+                "image" -> "当前：自定义图片"
+                "color" -> "当前：纯色（纯色下折射也看不太出来，建议用图片）"
+                else -> "当前：默认"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         // ---------- 系统提示词 ----------
         Divider(Modifier.padding(vertical = 8.dp))
@@ -346,6 +404,11 @@ fun SettingsScreen(vm: MainViewModel, onPickModel: () -> Unit) {
 
 /** 分组标题 */
 @Composable
+/** v10.142：背景纯色预设（浅色系，避免深底深字看不清） */
+private val BG_PRESETS = listOf(
+    0xFFEAF1FF, 0xFFF3E8FF, 0xFFE8F7EF, 0xFFFFF1E6, 0xFFF7F7F9, 0xFFDFE9F5
+)
+
 private fun SectionTitle(text: String) {
     Text(text, style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.primary,

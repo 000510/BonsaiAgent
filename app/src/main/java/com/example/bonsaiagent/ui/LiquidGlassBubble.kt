@@ -11,34 +11,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.RoundRect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import kotlin.math.PI
 
 /**
  * v10.141：透明液态玻璃 —— 按资料包「透明液态玻璃_边缘折射」的原原理重做（这是关键的一次方向纠正）。
@@ -76,8 +65,6 @@ fun Modifier.liquidRefractBackground(
 
     val density = LocalDensity.current
     val radiusPx = with(density) { corner.toPx() }
-    val lineStep = with(density) { 40.dp.toPx() }
-    val lineW = with(density) { 1.5.dp.toPx() }
 
     return this
         // 折射层在**外层**，包住下面 drawWithContent 画的内容
@@ -98,26 +85,8 @@ fun Modifier.liquidRefractBackground(
                 .createRuntimeShaderEffect(shader, "uTex")
                 .asComposeRenderEffect()
         }
-        // 背景层：真实界面内容 + 气泡矩形内几条极淡白横线（唯一的折射参照物，不着色）
-        .drawWithContent {
-            drawContent()
-            if (bubble.width > 1f && bubble.height > 1f) {
-                val path = Path().apply {
-                    addRoundRect(RoundRect(bubble, CornerRadius(radiusPx, radiusPx)))
-                }
-                clipPath(path) {
-                    var y = bubble.top + lineStep * 0.3f
-                    while (y < bubble.bottom) {
-                        drawRect(
-                            color = Color(0x38FFFFFF),
-                            topLeft = Offset(bubble.left, y),
-                            size = Size(bubble.width, lineW)
-                        )
-                        y += lineStep
-                    }
-                }
-            }
-        }
+        // v10.142：不再画「折射参照横线」——用户觉得莫名其妙，而且现在支持自定义背景，
+        // 真实壁纸/照片本身就是最好的参照物。
 }
 
 /**

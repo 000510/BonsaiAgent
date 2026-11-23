@@ -41,6 +41,8 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
             .matchParentSize()
             .liquidRefractBackground(enabled = blocked && refractOn, bubble = bubbleBounds)
     ) {
+    // v10.142：界面背景（自定义图片/纯色）—— 液态玻璃折射的就是这一层
+    AppBackground(vm.settings.value)
     // v10.99：消息区固定不动，不随键盘上移（键盘弹出只推输入框）
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         // v10.107：WORK 艺术字标识——证明当前是 Agent 模式（替代原返回入口/路由说明）

@@ -86,7 +86,13 @@ data class AgentSettings(
     val tokenDate: String = "",
 
     // v10.137：用户可管理的中转站列表（可增删改名）。空=首次，load 时用默认 3 站+迁移旧 key。
-    val providers: List<CloudProvider> = emptyList()
+    val providers: List<CloudProvider> = emptyList(),
+
+    // v10.142：界面背景（聊天页 + Agent 页）。透明玻璃要折射"有内容的背景"才看得见。
+    // bgType: "none"（默认白）/ "color"（纯色）/ "image"（用户选的图片，已复制到私有目录）
+    val bgType: String = "none",
+    val bgColor: Long = 0xFFEAF1FF,
+    val bgImagePath: String = ""
 )
 
 const val DEFAULT_SYSTEM_PROMPT = """你是手机助手，只回一行中文，不要复述、不要夹英文。
@@ -221,7 +227,10 @@ class SettingsStore(context: Context) {
         tokenBudget = sp.getInt("tokenBudget", 2000000),
         tokenUsed = sp.getInt("tokenUsed", 0),
         tokenDate = sp.getString("tokenDate", "") ?: "",
-        providers = loadProviders()
+        providers = loadProviders(),
+        bgType = sp.getString("bgType", "none") ?: "none",
+        bgColor = sp.getLong("bgColor", 0xFFEAF1FF),
+        bgImagePath = sp.getString("bgImagePath", "") ?: ""
     )
 
     /** v10.137：读中转站列表；首次用默认 3 站并迁移旧 key，不丢用户已填的 key。 */
@@ -306,6 +315,9 @@ class SettingsStore(context: Context) {
             putInt("tokenUsed", s.tokenUsed)
             putString("tokenDate", s.tokenDate)
             putString("providers", providersToJson(s.providers))
+            putString("bgType", s.bgType)
+            putLong("bgColor", s.bgColor)
+            putString("bgImagePath", s.bgImagePath)
         }.apply()
     }
 }

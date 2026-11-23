@@ -39,6 +39,8 @@ fun ChatScreen(vm: MainViewModel) {
     val listState = rememberLazyListState()
 
     Box(Modifier.fillMaxSize()) {
+    // v10.142：界面背景（自定义图片/纯色），与 Agent 页共用同一套设置
+    AppBackground(vm.settings.value)
     // v10.99：消息区固定不动，不随键盘上移；键盘弹出时右滑收输入法
     Box(Modifier.fillMaxSize()) {
         if (vm.chatMessages.isEmpty()) {
