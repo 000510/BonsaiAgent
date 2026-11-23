@@ -81,6 +81,8 @@ fun Modifier.liquidRefractBackground(
             shader.setFloatUniform("uChroma", 2.0f * scale)
             shader.setFloatUniform("uEdgeW", 1.2f * scale)
             shader.setFloatUniform("uEdgeOp", 0.45f)   // 原作 rim 0.45
+            // v10.143：内部磨砂模糊（Pack-v2 blur 默认 6，超过 ~10 会变回普通毛玻璃）
+            shader.setFloatUniform("uBlur", 6f * scale)
             renderEffect = RenderEffect
                 .createRuntimeShaderEffect(shader, "uTex")
                 .asComposeRenderEffect()
@@ -124,11 +126,10 @@ fun LiquidGlassCard(
         )
 
         if (selfPaint) {
-            // 兜底玻璃（低版本）：半透明白 + 细白边
+            // 兜底玻璃（低版本）：半透明白 + 细白边 —— 同样贴边，不内缩
             Box(
                 Modifier
                     .matchParentSize()
-                    .padding(pad)
                     .clip(shape)
                     .background(
                         Brush.verticalGradient(
@@ -141,52 +142,41 @@ fun LiquidGlassCard(
                     )
                     .border(1.2.dp, Color.White.copy(alpha = 0.85f), shape)
             )
-        } else {
-            // 框模式：内部已经是背景原样（透明玻璃），只补极淡的白雾让文字更好读
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .padding(pad)
-                    .clip(shape)
-                    .background(Color(0x1FFFFFFF))
-            )
         }
+        // selfPaint=false：玻璃内部 = 背景原样（已被 shader 折射 + 磨砂），不加任何颜色。
+        // v10.143：删掉了原来的 Color(0x1FFFFFFF) 白雾 —— 原作 frost=0，加白雾就成了「贴纸」。
 
-        // ---- 玻璃厚度柔光：内圈多层描边（原作 .rim 的 inset 亮边）----
+        // ---- 玻璃边缘高光：严格照原作 .rim ----
+        // v10.143：v10.142 前这里写了三层 1/3/5dp 的白色描边（内缩 9dp），
+        // 在气泡里凭空长出一圈发亮的环 —— 用户说的「中间有一圈明显亮了一度」就是它。
+        // 原作 .rim 只有：inset 1px 白 0.45 + 左上 1.5px 斜向 + 右下 1px 更弱，全部纯白，无彩色。
+        // 关键：必须贴边（不 padding），才能和 shader 的折射边界对齐。
         Box(
             Modifier
                 .matchParentSize()
-                .padding(pad)
                 .drawBehind {
                     val r = CornerRadius(radiusPx, radiusPx)
-                    for (i in 0 until 3) {
-                        drawRoundRect(
-                            color = Color.White.copy(alpha = (0.22f - i * 0.06f).coerceAtLeast(0.02f)),
-                            cornerRadius = r,
-                            style = Stroke(width = (1.0f + i * 2.0f).dp.toPx())
-                        )
-                    }
+                    // inset 0 0 0 1px rgba(255,255,255,.45)
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.45f),
+                        cornerRadius = r,
+                        style = Stroke(width = 1.dp.toPx())
+                    )
+                    // inset 1.5px 1.5px 1px rgba(255,255,255,.40) —— 只偏左上，不绕一圈
+                    val lit = Color.White.copy(alpha = 0.40f)
+                    val w1 = 1.dp.toPx()
+                    val off = 1.5.dp.toPx()
+                    drawLine(lit, androidx.compose.ui.geometry.Offset(off, w1 / 2f),
+                        androidx.compose.ui.geometry.Offset(size.width - off, w1 / 2f), w1)
+                    drawLine(lit, androidx.compose.ui.geometry.Offset(w1 / 2f, off),
+                        androidx.compose.ui.geometry.Offset(w1 / 2f, size.height - off), w1)
+                    // inset -1px -1px 1px rgba(255,255,255,.16) —— 右下更弱
+                    val dim = Color.White.copy(alpha = 0.16f)
+                    drawLine(dim, androidx.compose.ui.geometry.Offset(off, size.height - w1 / 2f),
+                        androidx.compose.ui.geometry.Offset(size.width - off, size.height - w1 / 2f), w1)
+                    drawLine(dim, androidx.compose.ui.geometry.Offset(size.width - w1 / 2f, off),
+                        androidx.compose.ui.geometry.Offset(size.width - w1 / 2f, size.height - off), w1)
                 }
-        )
-
-        // ---- 断面描边：上/左亮、下/右暗 ----
-        Box(
-            Modifier
-                .matchParentSize()
-                .padding(pad)
-                .clip(shape)
-                .border(
-                    width = 1.1.dp,
-                    brush = Brush.linearGradient(
-                        listOf(
-                            Color(0xFFFFFFFF),
-                            Color(0xCCFFFFFF),
-                            Color(0x4DA8C4FF),
-                            Color(0x99FFFFFF)
-                        )
-                    ),
-                    shape = shape
-                )
         )
 
         // ---- 内容层：用自身尺寸撑开父 Box ----
@@ -213,6 +203,7 @@ uniform float uCurve;
 uniform float uChroma;
 uniform float uEdgeW;
 uniform float uEdgeOp;
+uniform float uBlur;
 
 float sdRB(float2 p, float2 b, float r) {
     r = min(r, min(b.x, b.y));
@@ -248,6 +239,31 @@ float4 main(float2 p) {
     float4 b = uTex.eval(clamp(base - ca, float2(0.0), uRes - float2(1.0)));
 
     float3 col = float3(a.r, c.g, b.b);
+
+    // v10.143：移植 Pack-v2 glass.frag 第 21-22 行的五点模糊（原作 uP.z = blur），
+    // 并叠两层半径（bs、bs*2）让内部真正「磨砂」——上面的文字才浮得起来；
+    // 不模糊就是「一层透明贴纸」，字怎么调颜色都糊在背景里。
+    // 只模糊内部：边缘那圈的折射要保留锐利，所以混合权重用 m（靠边 m→1 → 保留折射）。
+    if (uBlur > 0.5) {
+        float bs = uBlur;
+        float3 s = col * 0.0;
+        float wsum = 0.0;
+        // 半径 1x 十字 4 点
+        s += uTex.eval(clamp(base + float2(bs, 0.0), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
+        s += uTex.eval(clamp(base - float2(bs, 0.0), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
+        s += uTex.eval(clamp(base + float2(0.0, bs), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
+        s += uTex.eval(clamp(base - float2(0.0, bs), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
+        // 半径 2x 对角 4 点（补大颗粒，糊得更实）
+        float b2 = bs * 2.0;
+        s += uTex.eval(clamp(base + float2(b2, b2), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
+        s += uTex.eval(clamp(base + float2(b2, -b2), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
+        s += uTex.eval(clamp(base + float2(-b2, b2), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
+        s += uTex.eval(clamp(base + float2(-b2, -b2), float2(0.0), uRes - float2(1.0))).rgb; wsum += 1.0;
+        // 中心原值权重 2，保证整体亮度不塌
+        s += col * 2.0; wsum += 2.0;
+        s /= wsum;
+        col = mix(s, col, m);
+    }
 
     // 1.2px 细白边（原作 .rim 的 inset 1px 亮边）
     float line = 1.0 - smoothstep(0.0, max(uEdgeW, 0.5), abs(d));

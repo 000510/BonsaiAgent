@@ -178,12 +178,34 @@ private fun GlassQuotaBubble(
                 Text("⚠️", fontSize = 16.sp)
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("云端调用失败，请切换中转站",
-                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF111111))
+                    // v10.143：银灰偏黑的「磨砂金属」字 —— 粗体 + 极细高光阴影（下白上暗）做磨砂凹凸感
+                    Text(
+                        "云端调用失败，请切换中转站",
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF3A4048),
+                        letterSpacing = 0.2.sp,
+                        style = androidx.compose.ui.text.TextStyle(
+                            shadow = androidx.compose.ui.graphics.Shadow(
+                                color = Color(0x8CFFFFFF),
+                                offset = androidx.compose.ui.geometry.Offset(0f, 1.2f),
+                                blurRadius = 1.6f
+                            )
+                        )
+                    )
                     val err = vm.lastCloudError.value
                     Text(
                         if (err.isNotBlank()) err.take(90) else "点下面任一站，自动继续刚才的任务",
-                        fontSize = 11.sp, color = Color(0xFF6B7280)
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF5E656E),
+                        style = androidx.compose.ui.text.TextStyle(
+                            shadow = androidx.compose.ui.graphics.Shadow(
+                                color = Color(0x66FFFFFF),
+                                offset = androidx.compose.ui.geometry.Offset(0f, 1f),
+                                blurRadius = 1.2f
+                            )
+                        )
                     )
                 }
                 TextButton(onClick = { expanded = !expanded }) {
