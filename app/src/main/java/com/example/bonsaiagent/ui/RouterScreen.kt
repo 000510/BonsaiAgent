@@ -32,24 +32,18 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
 
     Box(Modifier.fillMaxSize()) {
     val blocked = vm.quotaBlocked.value
-    // v10.139：Android 13+ 走「背景真折射」——气泡背后的消息层被 AGSL 掰弯（照资料包 demo 的做法）
-    val refractOn = android.os.Build.VERSION.SDK_INT >= 33
-    // v10.148：玻璃对齐锚点。旧版用 bubbleBounds(boundsInParent)，
-    // 卡片 modifier 链上挂着 padding/imePadding，不同版本对 parent 的解释不一致，
-    // 玻璃会比卡片大一圈且错位（截图里「灰框套白块」就是这么来的）。
-    // 现在弹窗和折射层统一用窗口坐标量，再换算回折射层局部坐标——语义唯一，永远对齐。
-    val glassAnchor = remember { GlassAnchor() }
 
     Box(
         Modifier
             .matchParentSize()
-            // v10.148：Android 12/12L 上用整层磨砂兜底（iOS 弹层同款做法：
-            // 背景糊掉 + 玻璃片，比白渐变实卡接近玻璃得多；Android 13+ 走下面的 AGSL 折射）
+            // v10.151：Android 12/12L 上弹窗出现时整层磨砂兜底（iOS 弹层同款：
+            // 背景糊掉 + 卡片自带磨砂底 = 真磨砂玻璃）；
+            // 13+ 玻璃自身已带磨砂，不再需要整层处理。
+            // v10.151 起不再使用全屏 AGSL 折射层（已整条删除，见 LiquidGlassBubble.kt 说明）。
             .then(
                 if (blocked && android.os.Build.VERSION.SDK_INT in 31..32)
                     Modifier.blur(22.dp) else Modifier
             )
-            .liquidRefractBackground(enabled = blocked && refractOn, anchor = glassAnchor)
     ) {
     // v10.142：界面背景（自定义图片/纯色）—— 液态玻璃折射的就是这一层
     AppBackground(vm.settings.value)
@@ -141,9 +135,7 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     if (blocked) {
         GlassQuotaBubble(
             vm = vm,
-            modifier = Modifier.align(Alignment.BottomCenter),
-            baseFrost = true,
-            anchor = glassAnchor
+            modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
 
@@ -167,18 +159,14 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
 @Composable
 private fun GlassQuotaBubble(
     vm: MainViewModel,
-    modifier: Modifier = Modifier,
-    baseFrost: Boolean = true,
-    anchor: GlassAnchor? = null
+    modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
     LiquidGlassCard(
         modifier = modifier
             .fillMaxWidth()
             .imePadding()
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp),
-        baseFrost = baseFrost,
-        anchor = anchor
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp)
     ) {
         Column(Modifier.fillMaxWidth()) {
             Row(

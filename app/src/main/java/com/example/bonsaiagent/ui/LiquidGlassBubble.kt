@@ -1,8 +1,5 @@
 package com.example.bonsaiagent.ui
 
-import android.graphics.RenderEffect
-import android.graphics.RuntimeShader
-import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -11,10 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -25,144 +18,38 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * v10.148：液态玻璃总修复（对应截图「弹框中间一块白色、没有玻璃感」）。
+ * v10.151：液态玻璃彻底重写。
  *
- * 本版修了四件事：
+ * 旧架构（v10.145~v10.150）：AGSL shader 挂在全屏折射层上，按测量的卡片矩形画玻璃。
+ * 四个版本实测都有一条与卡片错位的矩形色带（左右边缘恒定 x≈118/1097、顶部贴标题行
+ * 底部、收缩/展开都在），颜色始终等于玻璃色 —— 说明玻璃被按某个错误矩形多画了一层，
+ * 且这条测量/合成链路在本机上有无法从代码侧定位的歧义。按用户决定整条删掉重写。
  *
- * 1)【致命】AGSL 里 `vec3` 是 GLSL 类型，AGSL（SkSL）里只有 float3 —— 原来第 238 行
- *    `dot(s, vec3(0.299, 0.587, 0.114))` 会让 RuntimeShader **编译直接抛异常**，
- *    runCatching 吞掉后 shader == null → Android 13+ 的折射层从来没跑起来过。
- *    现已改为 float3，shader 才真正生效。
- *
- * 1.5)【v10.149 追加】浅色背景从「压暗 0.88」改为 iOS 式「亮磨砂」：
- *    压暗相当于把背景当暗镜子映出来，背景光斑的明暗透过压暗玻璃被放大成
- *    「玻璃里一块块色斑」（第二张实测截图）；现在浅背景向白霜化 + 轻微提冷，
- *    顶部冷渐变同步减弱，轮廓靠白边/内高光/投影定义。深/中背景仍走原作 1.06。
- *
- * 2)【对齐】旧版用 boundsInParent() 量气泡，但卡片 modifier 链上挂着
- *    imePadding + padding(12/12/8/104)，量出来的矩形会把外层 padding 也算进去
- *    → 玻璃比卡片大一圈、错位，形成「灰框套白块」的两层矩形观感。
- *    现在卡片和折射层两边都用 positionInWindow()/boundsInWindow() 量（窗口坐标系），
- *    在 shader 里相减换算成本层局部坐标 —— 语义唯一，永远和卡片严丝合缝。
- *
- * 3)【材质】纯色浅背景上，即使 shader 跑起来，玻璃内部=采样纯色 → 仍是一块平色卡。
- *    参照 Pack-v2 + iOS 玻璃材质，给玻璃内部补三层「自带质感」：
- *      · 厚度明暗（顶部微亮、底部微暗）
- *      · 内侧高光圈（inset highlight，距边缘一圈细白光）
- *      · 微噪点（打破纯色平涂，±2/255，图片背景下不可感知）
- *    原作算法（SDF/折射/色散/五点模糊/顶部冷渐变/菲涅尔/细白边）逐行保留。
- *
- * 4)【兜底】Android 12L 及以下没有 RuntimeShader，旧兜底是「白渐变实卡」= 白色块本体。
- *    换成低透明度磨砂片 + 顶部内侧高光 + 细白边（配合 RouterScreen 在 12/12L 上
- *    给整个背景加真实 blur，同样有玻璃感）。
- */
-class GlassAnchor {
-    /** 折射层（matchParentSize 全屏容器）左上角在窗口中的位置 */
-    var layerOrigin by mutableStateOf(Offset.Zero)
-    /** 玻璃卡片（视觉矩形）在窗口中的位置。由 LiquidGlassCard 量内容框再向外补 pad 得到 */
-    var cardRect by mutableStateOf(Rect.Zero)
-}
-
-@Composable
-fun Modifier.liquidRefractBackground(
-    enabled: Boolean,
-    anchor: GlassAnchor,
-    corner: Dp = 26.dp
-): Modifier {
-    val shader = remember {
-        if (Build.VERSION.SDK_INT >= 33) {
-            runCatching { RuntimeShader(AGSL_EDGE_REFRACT) }.getOrNull()
-        } else null
-    }
-    if (!enabled || shader == null) return this
-
-    val density = LocalDensity.current
-    val radiusPx = with(density) { corner.toPx() }
-
-    return this
-        // 折射层自己的窗口位置（用来把卡片窗口坐标换算成本层局部坐标）
-        .onGloballyPositioned { coords ->
-            anchor.layerOrigin = with(coords.positionInWindow()) { Offset(x.toFloat(), y.toFloat()) }
-        }
-        .graphicsLayer {
-            val card = anchor.cardRect
-            if (card.width <= 1f || card.height <= 1f) return@graphicsLayer
-            val scale = density.density.coerceAtMost(2f)
-            shader.setFloatUniform("uRes", size.width, size.height)
-            // 窗口坐标 → 本 layer 局部坐标（两边同在窗口坐标系里量，相减即得局部中心）
-            val cx = card.center.x - anchor.layerOrigin.x
-            val cy = card.center.y - anchor.layerOrigin.y
-            shader.setFloatUniform("uCenter", cx, cy)
-            shader.setFloatUniform("uHalf", card.width / 2f, card.height / 2f)
-            shader.setFloatUniform("uRadius", radiusPx)
-            // Pack-v2 参数表默认值（×dpr，dpr=min(devicePixelRatio,2)）：
-            //   uP = (strength 48, chroma 12, blur 1.2, band 60)
-            //   uE = (edgeW 1.5, edgeOp 0.85, lightAng -2.2, light 0.35)
-            shader.setFloatUniform("uP", 48f * scale, 12f * scale, 1.2f * scale, 60f * scale)
-            shader.setFloatUniform("uE", 1.5f * scale, 0.85f, -2.2f, 0.35f)
-            // v10.148 新增：材质参数 (内侧高光圈的内缩px, 高光强度)
-            shader.setFloatUniform("uMat", 4.5f * scale, 0.30f)
-            // v10.150：卡片自身已画磨砂底，shader 内部改半透明叠加，只负责边缘折射
-            shader.setFloatUniform("uBase", 1f)
-            shader.setFloatUniform("uFrost", 0f)
-            shader.setFloatUniform("uMag", 1f)
-            shader.setFloatUniform("uStr", 1f)
-            shader.setFloatUniform("uTint", 0f)
-            renderEffect = RenderEffect
-                .createRuntimeShaderEffect(shader, "uTex")
-                .asComposeRenderEffect()
-            // 诊断：如果玻璃区域再出现错位色块，这条日志能直接看出 uniform 是否正常
-            android.util.Log.d(
-                "LiquidGlass",
-                "card=%s origin=(%.0f,%.0f) uCenter=(%.0f,%.0f) uHalf=(%.0f,%.0f) r=%.0f"
-                    .format(card, anchor.layerOrigin.x, anchor.layerOrigin.y, cx, cy,
-                        card.width / 2f, card.height / 2f, radiusPx)
-            )
-        }
-}
-
-/**
- * 气泡外壳。
- *  - baseFrost = true（v10.150 起恒为 true）：卡片自己画磨砂底 + 白边 + 内高光。
- *    这层在卡片内部 clip，**永远和卡片严丝合缝、不可能错位**。
- *  - shader（Android 13+）：只负责边缘折射 + 菲涅尔/白边，内部改为半透明叠加（uBase=1），
- *    即使 shader 区域出现测量偏差，卡片依然是一块均匀玻璃，不会再出「错位色块」。
+ * 新架构：**玻璃 100% 画在卡片内部** —— clip 到卡片形状，物理上不可能与卡片错位：
+ *   磨砂渐变 + 顶部内侧高光 + 底部内侧暗边 + 细白边 + 投影。
+ * 视觉对应 iOS 浅色玻璃配方（blur + 白渐变 + 内高光 + 细边 + 阴影）。
+ * 代价是放弃了全屏边缘折射（纯色背景上本来也几乎看不出来；图片背景下想要
+ * 完整折射效果可后续以「玻璃后面内容复制进卡片」的方式再实现，不再走全屏层）。
  */
 @Composable
 fun LiquidGlassCard(
     modifier: Modifier = Modifier,
     corner: Dp = 26.dp,
     pad: Dp = 9.dp,
-    baseFrost: Boolean = true,
-    anchor: GlassAnchor? = null,
-    onBounds: ((Rect) -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
     val density = LocalDensity.current
     val radiusPx = with(density) { corner.toPx() }
-    val padPx = with(density) { pad.toPx() }
     val shape = RoundedCornerShape(corner)
 
-    // v10.150：直接量卡片外框（boundsInWindow = 窗口绝对坐标，无任何换算歧义）。
-    // 内容框的测量保留下来仅用于日志对照。
-    var outerRect by remember { mutableStateOf(Rect.Zero) }
-    Box(modifier.onGloballyPositioned { coords ->
-        outerRect = coords.boundsInWindow()
-        if (anchor != null) anchor.cardRect = outerRect
-        android.util.Log.d("LiquidGlass", "outer=$outerRect")
-    }) {
-        // ---- 0) 投影：中性黑（原作 0 14px 40px rgba(0,0,0,.28)）----
+    Box(modifier) {
+        // ---- 投影：中性黑，画在卡片外沿 ----
         Box(
             Modifier
                 .matchParentSize()
@@ -175,194 +62,79 @@ fun LiquidGlassCard(
                 )
         )
 
-        if (baseFrost) {
-            // v10.150 磨砂底（恒开）：低透明度磨砂片 + 顶部内侧高光 + 细白边。
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .clip(shape)
-                    .drawBehind {
-                        // 顶部内侧高光：玻璃上缘受光的一圈弧
-                        val stroke = 2.dp.toPx()
-                        drawRoundRect(
-                            brush = Brush.verticalGradient(
-                                listOf(Color.White.copy(alpha = 0.5f), Color.Transparent)
-                            ),
-                            topLeft = Offset(stroke / 2f, stroke / 2f),
-                            size = Size(size.width - stroke, size.height - stroke),
-                            cornerRadius = CornerRadius(radiusPx - stroke, radiusPx - stroke),
-                            style = Stroke(width = stroke)
-                        )
-                    }
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color(0x4DFFFFFF),  // 白 30%（shader 内部还会叠 55%，合计约等于原来的霜度）
-                                Color(0x40F4F7FF),  // 25%
-                                Color(0x33E3EAFF)   // 20%
-                            )
-                        )
-                    )
-                    .border(1.dp, Color.White.copy(alpha = 0.75f), shape)
-            )
-        }
-
-        // ---- 内容层：内容框测量只作日志对照（真正的锚点用上面的外框测量）----
+        // ---- 玻璃体：全部 clip 进卡片形状，任何设备上都不可能错位 ----
         Box(
             Modifier
-                .fillMaxWidth()
-                .padding(pad)
-                .onGloballyPositioned { coords ->
-                    val b = coords.boundsInWindow()
-                    val r = Rect(b.left - padPx, b.top - padPx, b.right + padPx, b.bottom + padPx)
-                    if (r != outerRect) {
-                        android.util.Log.d(
-                            "LiquidGlass",
-                            "contentInflated=$r outer=$outerRect  ← 两者应一致，不一致说明测量有问题"
+                .matchParentSize()
+                .clip(shape)
+                .drawBehind {
+                    // 以下全部对应 Pack-v2 / glass.frag 的质感要素（参数表默认值，×min(dpr,2)），
+                    // 只是改为「卡片内部描边」的实现方式，不再依赖全屏折射层：
+                    val stroke = 2.dp.toPx()
+                    val inset = stroke / 2f
+                    val r = CornerRadius(radiusPx - stroke, radiusPx - stroke)
+                    val rect = Rect(inset, inset, size.width - inset, size.height - inset)
+
+                    // 1) 顶部内侧高光弧：玻璃上缘的受光
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            listOf(Color.White.copy(alpha = 0.5f), Color.Transparent)
+                        ),
+                        topLeft = rect.topLeft, size = rect.size, cornerRadius = r,
+                        style = Stroke(width = stroke)
+                    )
+                    // 2) 底部内侧暗边：玻璃厚度感
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.05f))
+                        ),
+                        topLeft = rect.topLeft, size = rect.size, cornerRadius = r,
+                        style = Stroke(width = stroke)
+                    )
+                    // 3) 菲涅尔边缘光（定向）：原作 lightAng=-2.2rad、light=0.35 —— 光源在左，
+                    //    左缘亮、右缘留一点次级反光。用横向渐变描边近似。
+                    drawRoundRect(
+                        brush = Brush.horizontalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.30f),
+                                Color.Transparent,
+                                Color.Transparent,
+                                Color.White.copy(alpha = 0.10f)
+                            )
+                        ),
+                        topLeft = rect.topLeft, size = rect.size, cornerRadius = r,
+                        style = Stroke(width = stroke)
+                    )
+                    // 4) 色散彩边（原作 chroma=12 的近似）：外侧一圈红晕 + 内一圈蓝晕，各 1.5px
+                    val ca = 1.5.dp.toPx()
+                    drawRoundRect(
+                        color = Color(0x12FF4646), // 红晕
+                        topLeft = Offset(rect.left - ca, rect.top - ca),
+                        size = Size(rect.width + ca * 2, rect.height + ca * 2),
+                        cornerRadius = CornerRadius(radiusPx, radiusPx),
+                        style = Stroke(width = ca)
+                    )
+                    drawRoundRect(
+                        color = Color(0x12465AFF), // 蓝晕
+                        topLeft = Offset(rect.left + ca, rect.top + ca),
+                        size = Size(rect.width - ca * 2, rect.height - ca * 2),
+                        cornerRadius = CornerRadius(radiusPx - ca * 2, radiusPx - ca * 2),
+                        style = Stroke(width = ca)
+                    )
+                }
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0x66FFFFFF),   // 白 40%（对应 iOS 白渐变 .22 起，纯色底略加强）
+                            Color(0x52F4F7FF),   // 32%
+                            Color(0x40E3EAFF)    // 25%
                         )
-                    }
-                },
-            content = content
+                    )
+                )
+                .border(1.dp, Color.White.copy(alpha = 0.85f), shape) // 原作 edgeW1.5 / edgeOp0.85
         )
+
+        // ---- 内容层 ----
+        Box(Modifier.fillMaxWidth().padding(pad), content = content)
     }
 }
-
-/**
- * 边缘折射着色器（整体移植自「LiquidGlass-Pack-v2 / shader/glass.frag」，画心人，MIT）：
- *   SDF 圆角矩形 → 法线 g（朝外）→ t=clamp(-d/band) → k=(1-t^0.3)^2
- *   → refr=-g*k*strength（朝中心推）、ca=-g*k*chroma（色散）→ 5 点十字模糊
- *   → col=s*(亮度自适应)+冷色 → 顶部冷色渐变 → 材质(厚度/内侧高光/噪点) → 菲涅尔边缘光(定向) → 细白边
- *   → alpha=max(inside,line*edgeOp)，内部不透明（interior alpha=1）
- * 特性：玻璃整体是**均匀的亮体**，不像自研版「边缘折射带压暗、中部平坦区原样」那样
- * 在交界处产生一条与页面同色的「长方形高亮带」。
- */
-private const val AGSL_EDGE_REFRACT = """
-// 移植自 LiquidGlass-Pack-v2 / shader/glass.frag（MIT，画心人）。单元素版本。
-// 语义与算法逐行对应原版：
-//   SDF 圆角矩形 → 中心差分法线 g → t=clamp(-d/band) → k=(1-t^0.3)^2
-//   → refr=-g*k*strength, ca=-g*k*chroma → 5 点十字模糊 → col=s*1.06+冷色
-//   → 顶部冷色渐变 → 磨砂/着色 → 材质补强 → 菲涅尔边缘光(定向) → 细白边 → alpha 合成(内部不透明)
-// 参数 = Pack-v2 参数表默认值（×dpr，dpr=min(devicePixelRatio,2)，Kotlin 侧传入）。
-// ⚠️ AGSL 是 SkSL 语法：只有 float2/float3/float4，没有 vec3 —— 旧版这里写 vec3 导致
-//    RuntimeShader 编译失败、折射层整个失效（v10.148 修复）。
-uniform shader uTex;
-uniform float2 uRes;
-uniform float2 uCenter;
-uniform float2 uHalf;
-uniform float uRadius;
-uniform float4 uP;   // (strength 折射, chroma 色散, blur 模糊px, band 折射带宽px)
-uniform float4 uE;   // (edgeWidth 白边px, edgeOpacity, 光源角度rad, 边缘光强度)
-uniform float2 uMat; // v10.148: (内侧高光圈内缩px, 高光强度)
-uniform float uBase; // v10.150: 1 = 卡片已画磨砂底，shader 内部改半透明叠加
-uniform float uFrost;
-uniform float uMag;
-uniform float uStr;
-uniform float uTint;
-
-float sdRB(float2 p, float2 b, float r) {
-    r = min(r, min(b.x, b.y));
-    float2 q = abs(p) - b + r;
-    return min(max(q.x, q.y), 0.0) + length(max(q, float2(0.0))) - r;
-}
-
-// 原版 tap：RGB 分通道采样 + 色散偏移，uv 夹在 [.001,.999]（像素坐标对应 [1, uRes-1]）。
-float3 tap(float2 px, float2 ca) {
-    float2 u = clamp(px + ca, float2(1.0), uRes - 1.0);
-    float2 v = clamp(px,       float2(1.0), uRes - 1.0);
-    float2 w = clamp(px - ca,  float2(1.0), uRes - 1.0);
-    return float3(uTex.eval(u).r, uTex.eval(v).g, uTex.eval(w).b);
-}
-
-float4 glass(float2 p) {
-    // 坐标系：uCenter/uHalf 由 Kotlin 侧把「卡片窗口坐标」换算到本层局部坐标后传入，
-    // 与 p 同坐标系，可直接相减。
-    // ⚠️ 切勿用 uRes*0.5 当中心 —— 那会把玻璃画到屏幕正中央（v10.145 的坑）。
-    float d = sdRB(p - uCenter, uHalf, uRadius);
-    if (d > 3.0) return float4(0.0);
-
-    // 朝外法线（中心差分，e=1.5，与原件一致）
-    float e = 1.5;
-    float2 g = float2(
-        sdRB(p + float2(e, 0.0) - uCenter, uHalf, uRadius) - sdRB(p - float2(e, 0.0) - uCenter, uHalf, uRadius),
-        sdRB(p + float2(0.0, e) - uCenter, uHalf, uRadius) - sdRB(p - float2(0.0, e) - uCenter, uHalf, uRadius)
-    );
-    g = normalize(g + 0.000001);
-
-    // 折射衰减：t = -d/band，k = (1 - t^0.3)^2（原件第 19 行）
-    float t = clamp(-d / max(uP.w, 1.0), 0.0, 1.0);
-    float k = pow(1.0 - pow(t, 0.30), 2.0);
-
-    float2 q = p;
-    if (uMag > 1.001) q = uCenter + (p - uCenter) / uMag;
-    float2 refr = -g * k * uP.x * uStr;
-    float2 ca = -g * k * uP.y * uStr;
-    float2 bp = q + refr;
-    float bs = uP.z;
-
-    // 5 点模糊（原件第 21 行：中心 + 十字 4 点，半径 bs）
-    float3 s = tap(bp, ca)
-             + tap(bp + float2(bs, 0.0), ca)
-             + tap(bp - float2(bs, 0.0), ca)
-             + tap(bp + float2(0.0, bs), ca)
-             + tap(bp - float2(0.0, bs), ca);
-    s /= 5.0;
-
-    // v10.149：浅色背景走 iOS 式「亮磨砂」，不再压暗。
-    // v10.148 在浅背景上把玻璃压暗到 0.88 —— 相当于把背景当暗镜子映出来，
-    // 背景光斑的明暗透过压暗玻璃被放大成「一块块色斑」（用户实测反馈）。
-    // 现在浅背景改为向白霜化（mix 白 28% + 轻微提冷），轮廓靠白边/内高光/投影定义；
-    // 深/中背景保持原作 1.06 提亮（风景图效果不变）。
-    float luma = dot(s, float3(0.299, 0.587, 0.114));
-    float lightBg = smoothstep(0.55, 0.85, luma);
-    float3 frostCol = mix(s, float3(1.0), 0.28) + float3(0.02, 0.035, 0.07);
-    float3 darkCol = s * 1.06 + float3(0.015, 0.025, 0.048);
-    float3 col = mix(darkCol, frostCol, lightBg);
-
-    // 顶部冷色渐变（原件第 24 行；原件 smoothstep(+a,-b) 逆序在 AGSL 未定义，改写为等价形式）。
-    // v10.149：浅背景上大幅减弱 —— 亮磨砂上再压顶会显得脏（顶部发灰的色块感来源之一）。
-    col += (1.0 - smoothstep(-uHalf.y * 1.1, uHalf.y * 0.35, p.y - uCenter.y))
-           * float3(0.055, 0.075, 0.105) * (1.0 - lightBg * 0.75);
-
-    // 磨砂 / 着色（原件 25-26 行；默认 frost=0、tint=0 → 无效果，保留以对齐算法）
-    col = mix(col, float3(0.97, 0.98, 1.0), uFrost * 0.85);
-    col = mix(col, float3(0.88, 0.94, 1.0), uTint);
-
-    // ── v10.148 材质补强：纯色背景上也能看出「玻璃片」────────────────
-    // 1) 厚度明暗：顶部微亮、底部微暗（受光体积感）
-    float yn = clamp((p.y - (uCenter.y - uHalf.y)) / max(uHalf.y * 2.0, 1.0), 0.0, 1.0);
-    col *= (1.03 - 0.07 * yn);
-    // 2) 内侧高光圈：距边缘 uMat.x 像素处一圈细白光（iOS 玻璃的 inset highlight）
-    float ring = (1.0 - smoothstep(0.8, 2.4, abs(d + uMat.x))) * uMat.y;
-    col += float3(ring);
-    // 3) 微噪点：打破纯色平涂（±2/255，图片背景下不可感知）
-    float grain = fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
-    col += (grain - 0.5) * 0.016;
-
-    // 菲涅尔边缘光（原件 28-30 行，定向光源角度 uE.z）
-    float2 Ld = float2(cos(uE.z), sin(uE.z));
-    float rim = 1.0 - smoothstep(0.0, 7.0, -d);
-    col += uE.w * rim * pow(max(dot(g, Ld), 0.0), 2.0);
-    col += uE.w * 0.45 * rim * pow(max(dot(g, -Ld), 0.0), 3.0);
-
-    // 细白边（原件 32 行）
-    float line = 1.0 - smoothstep(0.0, uE.x, abs(d));
-    col = mix(col, float3(1.0), line * uE.y);
-
-    // 内部不透明 + 白边 alpha（原件 34-35 行）
-    float inside = 1.0 - smoothstep(-0.8, 0.8, d);
-    return float4(col, max(inside, line * uE.y));
-}
-
-float4 main(float2 p) {
-    float4 bg = uTex.eval(p);
-    float d = sdRB(p - uCenter, uHalf, uRadius);
-    if (d > 3.0) return bg;
-    float4 a = glass(p);
-    // v10.150：uBase=1 时，玻璃中部改半透明（0.55），让卡片自带的磨砂底透出来 ——
-    // 即使 shader 区域有测量偏差，卡片整体依然是均匀玻璃，不会再出「错位色块」；
-    // 边缘 1.5×band 像素带内保持全强度（折射/白边/菲涅尔只在这里起作用）。
-    float deep = smoothstep(0.0, uP.w * 1.5, -d);
-    float finalA = a.a * mix(1.0, 0.55, uBase * deep);
-    return float4(mix(bg.rgb, a.rgb, finalA), 1.0);
-}
-"""
