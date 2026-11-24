@@ -13,9 +13,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -34,12 +34,22 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     val blocked = vm.quotaBlocked.value
     // v10.139：Android 13+ 走「背景真折射」——气泡背后的消息层被 AGSL 掰弯（照资料包 demo 的做法）
     val refractOn = android.os.Build.VERSION.SDK_INT >= 33
-    var bubbleBounds by remember { mutableStateOf(Rect.Zero) }
+    // v10.148：玻璃对齐锚点。旧版用 bubbleBounds(boundsInParent)，
+    // 卡片 modifier 链上挂着 padding/imePadding，不同版本对 parent 的解释不一致，
+    // 玻璃会比卡片大一圈且错位（截图里「灰框套白块」就是这么来的）。
+    // 现在弹窗和折射层统一用窗口坐标量，再换算回折射层局部坐标——语义唯一，永远对齐。
+    val glassAnchor = remember { GlassAnchor() }
 
     Box(
         Modifier
             .matchParentSize()
-            .liquidRefractBackground(enabled = blocked && refractOn, bubble = bubbleBounds)
+            // v10.148：Android 12/12L 上用整层磨砂兜底（iOS 弹层同款做法：
+            // 背景糊掉 + 玻璃片，比白渐变实卡接近玻璃得多；Android 13+ 走下面的 AGSL 折射）
+            .then(
+                if (blocked && android.os.Build.VERSION.SDK_INT in 31..32)
+                    Modifier.blur(22.dp) else Modifier
+            )
+            .liquidRefractBackground(enabled = blocked && refractOn, anchor = glassAnchor)
     ) {
     // v10.142：界面背景（自定义图片/纯色）—— 液态玻璃折射的就是这一层
     AppBackground(vm.settings.value)
@@ -133,7 +143,7 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
             vm = vm,
             modifier = Modifier.align(Alignment.BottomCenter),
             selfPaint = !refractOn,
-            onBounds = { bubbleBounds = it }
+            anchor = glassAnchor
         )
     }
 
@@ -159,7 +169,7 @@ private fun GlassQuotaBubble(
     vm: MainViewModel,
     modifier: Modifier = Modifier,
     selfPaint: Boolean = true,
-    onBounds: ((Rect) -> Unit)? = null
+    anchor: GlassAnchor? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     LiquidGlassCard(
@@ -168,7 +178,7 @@ private fun GlassQuotaBubble(
             .imePadding()
             .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp),
         selfPaint = selfPaint,
-        onBounds = onBounds
+        anchor = anchor
     ) {
         Column(Modifier.fillMaxWidth()) {
             Row(
