@@ -123,19 +123,22 @@ fun LiquidGlassCard(
                     )
                 }
                 .background(
-                    // v10.152 诊断版：磨砂底改成【不透明红】，用于判定色块的层级。
-                    // - 卡片全红、色块还是白的 → 色块画在卡片之上（系统浮层或更高层）；
-                    // - 色块消失 → 它与磨砂的半透明合成有关，改磨砂即可；
-                    // 定位完成后改回：Color(0x66FFFFFF) / Color(0x52F4F7FF) / Color(0x40E3EAFF)
+                    // v10.153：磨砂底提到近不透明（白 95/91/87%），只留约一成背景透色。
+                    // 依据 v10.152 红卡探针：色块在红卡上逐像素完全消失（带内外均为 236,103,98）
+                    // => 它不在卡片之上，而是「透过半透明磨砂看到的、卡片之下某个接近纯白的东西」。
+                    // 内容子树 / drawBehind 描边 / 输入栏 / 主题白色 Surface 均已逐行排查干净，
+                    // 四版玻璃（含无 shader 的 v10.151 纯 Kotlin 绘制）都复现 => 本机合成层怪癖。
+                    // 务实收口：透色压到一成，穿透强度等比衰减到肉眼不可见，玻璃质感要素全保留。
+                    // 若仍隐约可见：把下面三行全部改成 0xFFFFFFFF（100% 不透明，物理上必消失）。
                     Brush.verticalGradient(
                         listOf(
-                            Color(0xFFFF4444),
-                            Color(0xFFFF5555),
-                            Color(0xFFFF6666)
+                            Color(0xF2FFFFFF),   // 白 95%
+                            Color(0xE8F4F7FF),   // 91%
+                            Color(0xDEE3EAFF)    // 87%
                         )
                     )
                 )
-                .border(1.dp, Color(0xFFCC2222), shape)
+                .border(1.dp, Color.White.copy(alpha = 0.85f), shape) // 原作 edgeW1.5 / edgeOp0.85
         )
 
         // ---- 内容层 ----
