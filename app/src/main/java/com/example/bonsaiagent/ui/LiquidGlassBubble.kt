@@ -123,15 +123,19 @@ fun LiquidGlassCard(
                     )
                 }
                 .background(
+                    // v10.152 诊断版：磨砂底改成【不透明红】，用于判定色块的层级。
+                    // - 卡片全红、色块还是白的 → 色块画在卡片之上（系统浮层或更高层）；
+                    // - 色块消失 → 它与磨砂的半透明合成有关，改磨砂即可；
+                    // 定位完成后改回：Color(0x66FFFFFF) / Color(0x52F4F7FF) / Color(0x40E3EAFF)
                     Brush.verticalGradient(
                         listOf(
-                            Color(0x66FFFFFF),   // 白 40%（对应 iOS 白渐变 .22 起，纯色底略加强）
-                            Color(0x52F4F7FF),   // 32%
-                            Color(0x40E3EAFF)    // 25%
+                            Color(0xFFFF4444),
+                            Color(0xFFFF5555),
+                            Color(0xFFFF6666)
                         )
                     )
                 )
-                .border(1.dp, Color.White.copy(alpha = 0.85f), shape) // 原作 edgeW1.5 / edgeOp0.85
+                .border(1.dp, Color(0xFFCC2222), shape)
         )
 
         // ---- 内容层 ----
