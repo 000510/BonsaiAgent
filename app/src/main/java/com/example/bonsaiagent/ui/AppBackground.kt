@@ -74,12 +74,13 @@ private fun DrawScope.drawBlobs(base: Color) {
     val light = lerp(base, Color.White, 0.10f)
     val dark = lerp(base, Color.Black, 0.10f)
     // (中心x比例, 中心y比例, 半径比例, 颜色, 透明度)
-    // 注意：暗斑避开玻璃中心区域（弹窗在底部），否则玻璃中间会显出一团脏灰色
+    // v10.149：暗斑全部避开底部弹窗区域 —— 玻璃内部会映出背景的明暗，
+    // 暗斑压在弹窗下面就会在玻璃里显出一块「不一样颜色的区域」
     val blobs = listOf(
-        Blob(w * 0.20f, h * 0.26f, w * 0.58f, light, 0.55f),
-        Blob(w * 0.92f, h * 0.30f, w * 0.50f, dark, 0.45f),
-        Blob(w * 0.55f, h * 0.88f, w * 0.62f, light, 0.60f),
-        Blob(w * 0.06f, h * 0.70f, w * 0.44f, dark, 0.45f)
+        Blob(w * 0.20f, h * 0.24f, w * 0.58f, light, 0.55f),
+        Blob(w * 0.92f, h * 0.26f, w * 0.50f, dark, 0.40f),
+        Blob(w * 0.55f, h * 0.86f, w * 0.62f, light, 0.55f),
+        Blob(w * 0.06f, h * 0.52f, w * 0.42f, light, 0.30f)
     )
     blobs.forEach { b ->
         val center = Offset(b.cx, b.cy)

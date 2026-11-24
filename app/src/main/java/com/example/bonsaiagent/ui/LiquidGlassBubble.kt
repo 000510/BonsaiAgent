@@ -45,6 +45,11 @@ import androidx.compose.ui.unit.dp
  *    runCatching 吞掉后 shader == null → Android 13+ 的折射层从来没跑起来过。
  *    现已改为 float3，shader 才真正生效。
  *
+ * 1.5)【v10.149 追加】浅色背景从「压暗 0.88」改为 iOS 式「亮磨砂」：
+ *    压暗相当于把背景当暗镜子映出来，背景光斑的明暗透过压暗玻璃被放大成
+ *    「玻璃里一块块色斑」（第二张实测截图）；现在浅背景向白霜化 + 轻微提冷，
+ *    顶部冷渐变同步减弱，轮廓靠白边/内高光/投影定义。深/中背景仍走原作 1.06。
+ *
  * 2)【对齐】旧版用 boundsInParent() 量气泡，但卡片 modifier 链上挂着
  *    imePadding + padding(12/12/8/104)，量出来的矩形会把外层 padding 也算进去
  *    → 玻璃比卡片大一圈、错位，形成「灰框套白块」的两层矩形观感。
@@ -281,14 +286,21 @@ float4 glass(float2 p) {
              + tap(bp - float2(0.0, bs), ca);
     s /= 5.0;
 
-    // v10.147：背景自适应对比（原件第 23 行「×1.06 提亮」在浅色/纯色背景上会过曝成纯白实卡）。
-    // 暗/中背景(luma<0.55)保持原版 1.06（风景图效果不变）；亮背景(luma>0.85)压暗到 0.88 + 撤冷色。
+    // v10.149：浅色背景走 iOS 式「亮磨砂」，不再压暗。
+    // v10.148 在浅背景上把玻璃压暗到 0.88 —— 相当于把背景当暗镜子映出来，
+    // 背景光斑的明暗透过压暗玻璃被放大成「一块块色斑」（用户实测反馈）。
+    // 现在浅背景改为向白霜化（mix 白 28% + 轻微提冷），轮廓靠白边/内高光/投影定义；
+    // 深/中背景保持原作 1.06 提亮（风景图效果不变）。
     float luma = dot(s, float3(0.299, 0.587, 0.114));
-    float boost = mix(1.06, 0.88, smoothstep(0.55, 0.85, luma));
-    float3 col = s * boost + float3(0.015, 0.025, 0.048) * (1.0 - smoothstep(0.55, 0.85, luma));
+    float lightBg = smoothstep(0.55, 0.85, luma);
+    float3 frostCol = mix(s, float3(1.0), 0.28) + float3(0.02, 0.035, 0.07);
+    float3 darkCol = s * 1.06 + float3(0.015, 0.025, 0.048);
+    float3 col = mix(darkCol, frostCol, lightBg);
 
-    // 顶部冷色渐变（原件第 24 行；原件 smoothstep(+a,-b) 逆序在 AGSL 未定义，改写为等价形式）
-    col += (1.0 - smoothstep(-uHalf.y * 1.1, uHalf.y * 0.35, p.y - uCenter.y)) * float3(0.055, 0.075, 0.105);
+    // 顶部冷色渐变（原件第 24 行；原件 smoothstep(+a,-b) 逆序在 AGSL 未定义，改写为等价形式）。
+    // v10.149：浅背景上大幅减弱 —— 亮磨砂上再压顶会显得脏（顶部发灰的色块感来源之一）。
+    col += (1.0 - smoothstep(-uHalf.y * 1.1, uHalf.y * 0.35, p.y - uCenter.y))
+           * float3(0.055, 0.075, 0.105) * (1.0 - lightBg * 0.75);
 
     // 磨砂 / 着色（原件 25-26 行；默认 frost=0、tint=0 → 无效果，保留以对齐算法）
     col = mix(col, float3(0.97, 0.98, 1.0), uFrost * 0.85);
