@@ -142,7 +142,7 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
         GlassQuotaBubble(
             vm = vm,
             modifier = Modifier.align(Alignment.BottomCenter),
-            selfPaint = !refractOn,
+            baseFrost = true,
             anchor = glassAnchor
         )
     }
@@ -168,7 +168,7 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
 private fun GlassQuotaBubble(
     vm: MainViewModel,
     modifier: Modifier = Modifier,
-    selfPaint: Boolean = true,
+    baseFrost: Boolean = true,
     anchor: GlassAnchor? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -177,7 +177,7 @@ private fun GlassQuotaBubble(
             .fillMaxWidth()
             .imePadding()
             .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp),
-        selfPaint = selfPaint,
+        baseFrost = baseFrost,
         anchor = anchor
     ) {
         Column(Modifier.fillMaxWidth()) {

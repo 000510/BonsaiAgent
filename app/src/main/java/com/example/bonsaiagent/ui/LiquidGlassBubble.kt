@@ -101,7 +101,9 @@ fun Modifier.liquidRefractBackground(
             val scale = density.density.coerceAtMost(2f)
             shader.setFloatUniform("uRes", size.width, size.height)
             // 窗口坐标 → 本 layer 局部坐标（两边同在窗口坐标系里量，相减即得局部中心）
-            shader.setFloatUniform("uCenter", card.center.x - anchor.layerOrigin.x, card.center.y - anchor.layerOrigin.y)
+            val cx = card.center.x - anchor.layerOrigin.x
+            val cy = card.center.y - anchor.layerOrigin.y
+            shader.setFloatUniform("uCenter", cx, cy)
             shader.setFloatUniform("uHalf", card.width / 2f, card.height / 2f)
             shader.setFloatUniform("uRadius", radiusPx)
             // Pack-v2 参数表默认值（×dpr，dpr=min(devicePixelRatio,2)）：
@@ -111,6 +113,8 @@ fun Modifier.liquidRefractBackground(
             shader.setFloatUniform("uE", 1.5f * scale, 0.85f, -2.2f, 0.35f)
             // v10.148 新增：材质参数 (内侧高光圈的内缩px, 高光强度)
             shader.setFloatUniform("uMat", 4.5f * scale, 0.30f)
+            // v10.150：卡片自身已画磨砂底，shader 内部改半透明叠加，只负责边缘折射
+            shader.setFloatUniform("uBase", 1f)
             shader.setFloatUniform("uFrost", 0f)
             shader.setFloatUniform("uMag", 1f)
             shader.setFloatUniform("uStr", 1f)
@@ -118,20 +122,29 @@ fun Modifier.liquidRefractBackground(
             renderEffect = RenderEffect
                 .createRuntimeShaderEffect(shader, "uTex")
                 .asComposeRenderEffect()
+            // 诊断：如果玻璃区域再出现错位色块，这条日志能直接看出 uniform 是否正常
+            android.util.Log.d(
+                "LiquidGlass",
+                "card=%s origin=(%.0f,%.0f) uCenter=(%.0f,%.0f) uHalf=(%.0f,%.0f) r=%.0f"
+                    .format(card, anchor.layerOrigin.x, anchor.layerOrigin.y, cx, cy,
+                        card.width / 2f, card.height / 2f, radiusPx)
+            )
         }
 }
 
 /**
  * 气泡外壳。
- *  - selfPaint = true  ：Android 12L 及以下兜底（低透明度磨砂玻璃片）
- *  - selfPaint = false ：背景已被 [liquidRefractBackground] 折射，这里只画玻璃「框」
+ *  - baseFrost = true（v10.150 起恒为 true）：卡片自己画磨砂底 + 白边 + 内高光。
+ *    这层在卡片内部 clip，**永远和卡片严丝合缝、不可能错位**。
+ *  - shader（Android 13+）：只负责边缘折射 + 菲涅尔/白边，内部改为半透明叠加（uBase=1），
+ *    即使 shader 区域出现测量偏差，卡片依然是一块均匀玻璃，不会再出「错位色块」。
  */
 @Composable
 fun LiquidGlassCard(
     modifier: Modifier = Modifier,
     corner: Dp = 26.dp,
     pad: Dp = 9.dp,
-    selfPaint: Boolean = true,
+    baseFrost: Boolean = true,
     anchor: GlassAnchor? = null,
     onBounds: ((Rect) -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit
@@ -141,7 +154,14 @@ fun LiquidGlassCard(
     val padPx = with(density) { pad.toPx() }
     val shape = RoundedCornerShape(corner)
 
-    Box(modifier) {
+    // v10.150：直接量卡片外框（boundsInWindow = 窗口绝对坐标，无任何换算歧义）。
+    // 内容框的测量保留下来仅用于日志对照。
+    var outerRect by remember { mutableStateOf(Rect.Zero) }
+    Box(modifier.onGloballyPositioned { coords ->
+        outerRect = coords.boundsInWindow()
+        if (anchor != null) anchor.cardRect = outerRect
+        android.util.Log.d("LiquidGlass", "outer=$outerRect")
+    }) {
         // ---- 0) 投影：中性黑（原作 0 14px 40px rgba(0,0,0,.28)）----
         Box(
             Modifier
@@ -155,9 +175,8 @@ fun LiquidGlassCard(
                 )
         )
 
-        if (selfPaint) {
-            // v10.148 兜底玻璃 v2：低透明度磨砂片 + 顶部内侧高光 + 细白边。
-            // 旧版 0x8CFFFFFF(白55%) 起头的渐变在浅色背景上就是一块白卡 —— 这就是截图里的白色块。
+        if (baseFrost) {
+            // v10.150 磨砂底（恒开）：低透明度磨砂片 + 顶部内侧高光 + 细白边。
             Box(
                 Modifier
                     .matchParentSize()
@@ -178,20 +197,17 @@ fun LiquidGlassCard(
                     .background(
                         Brush.verticalGradient(
                             listOf(
-                                Color(0x59FFFFFF),  // 白 35%
-                                Color(0x47F4F7FF),  // 28%
-                                Color(0x38E3EAFF)   // 22%
+                                Color(0x4DFFFFFF),  // 白 30%（shader 内部还会叠 55%，合计约等于原来的霜度）
+                                Color(0x40F4F7FF),  // 25%
+                                Color(0x33E3EAFF)   // 20%
                             )
                         )
                     )
                     .border(1.dp, Color.White.copy(alpha = 0.75f), shape)
             )
         }
-        // selfPaint=false：玻璃内部 = 背景原样（已被 shader 折射 + 材质），不加任何颜色。
 
-        // ---- 内容层：量“内容框”，向外补 pad → 得到玻璃视觉矩形 ----
-        // 用 boundsInWindow() 而不是 boundsInParent()：窗口坐标系语义唯一，
-        // 不会被 padding/imePadding 等 modifier 包装坑到（v10.148 对齐修复）。
+        // ---- 内容层：内容框测量只作日志对照（真正的锚点用上面的外框测量）----
         Box(
             Modifier
                 .fillMaxWidth()
@@ -199,8 +215,12 @@ fun LiquidGlassCard(
                 .onGloballyPositioned { coords ->
                     val b = coords.boundsInWindow()
                     val r = Rect(b.left - padPx, b.top - padPx, b.right + padPx, b.bottom + padPx)
-                    if (anchor != null) anchor.cardRect = r
-                    onBounds?.invoke(r)
+                    if (r != outerRect) {
+                        android.util.Log.d(
+                            "LiquidGlass",
+                            "contentInflated=$r outer=$outerRect  ← 两者应一致，不一致说明测量有问题"
+                        )
+                    }
                 },
             content = content
         )
@@ -233,6 +253,7 @@ uniform float uRadius;
 uniform float4 uP;   // (strength 折射, chroma 色散, blur 模糊px, band 折射带宽px)
 uniform float4 uE;   // (edgeWidth 白边px, edgeOpacity, 光源角度rad, 边缘光强度)
 uniform float2 uMat; // v10.148: (内侧高光圈内缩px, 高光强度)
+uniform float uBase; // v10.150: 1 = 卡片已画磨砂底，shader 内部改半透明叠加
 uniform float uFrost;
 uniform float uMag;
 uniform float uStr;
@@ -334,8 +355,14 @@ float4 glass(float2 p) {
 
 float4 main(float2 p) {
     float4 bg = uTex.eval(p);
-    if (sdRB(p - uCenter, uHalf, uRadius) > 3.0) return bg;
+    float d = sdRB(p - uCenter, uHalf, uRadius);
+    if (d > 3.0) return bg;
     float4 a = glass(p);
-    return float4(mix(bg.rgb, a.rgb, a.a), 1.0);
+    // v10.150：uBase=1 时，玻璃中部改半透明（0.55），让卡片自带的磨砂底透出来 ——
+    // 即使 shader 区域有测量偏差，卡片整体依然是均匀玻璃，不会再出「错位色块」；
+    // 边缘 1.5×band 像素带内保持全强度（折射/白边/菲涅尔只在这里起作用）。
+    float deep = smoothstep(0.0, uP.w * 1.5, -d);
+    float finalA = a.a * mix(1.0, 0.55, uBase * deep);
+    return float4(mix(bg.rgb, a.rgb, finalA), 1.0);
 }
 """
