@@ -1,5 +1,17 @@
 package com.example.bonsaiagent.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -18,8 +30,16 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bonsaiagent.ChatMessage
@@ -33,13 +53,22 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
 
     Box(Modifier.fillMaxSize()) {
     val blocked = vm.quotaBlocked.value
+    // v10.158：背景层（AppBackground + 对话）在窗口里的位置/尺寸。
+    // 玻璃卡片靠它把背景「镜像」进卡片内部做真折射 —— 不需要全屏折射层，
+    // 也不需要任何坐标换算（卡片与镜像都在卡内，天然对齐）。
+    val bgFrame = remember { mutableStateOf(Rect.Zero) }
     Box(
         Modifier
             .matchParentSize()
+            .onGloballyPositioned {
+                bgFrame.value = Rect(
+                    it.positionInWindow(),
+                    Size(it.size.width.toFloat(), it.size.height.toFloat())
+                )
+            }
             // v10.151：Android 12/12L 上弹窗出现时整层磨砂兜底（iOS 弹层同款：
             // 背景糊掉 + 卡片自带磨砂底 = 真磨砂玻璃）；
             // 13+ 玻璃自身已带磨砂，不再需要整层处理。
-            // v10.151 起不再使用全屏 AGSL 折射层（已整条删除，见 LiquidGlassBubble.kt 说明）。
             .then(
                 if (blocked && android.os.Build.VERSION.SDK_INT in 31..32)
                     Modifier.blur(22.dp) else Modifier
@@ -112,7 +141,12 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     if (blocked) {
         GlassQuotaBubble(
             vm = vm,
-            modifier = Modifier.align(Alignment.BottomCenter)
+            modifier = Modifier.align(Alignment.BottomCenter),
+            backdropOrigin = bgFrame.value.topLeft,
+            backdropSize = IntSize(
+                bgFrame.value.width.toInt().coerceAtLeast(1),
+                bgFrame.value.height.toInt().coerceAtLeast(1)
+            )
         )
     }
 
@@ -169,33 +203,86 @@ private fun RouterChatBody(vm: MainViewModel, listState: LazyListState) {
 @Composable
 private fun GlassQuotaBubble(
     vm: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    backdropOrigin: Offset = Offset.Zero,
+    backdropSize: IntSize = IntSize.Zero
 ) {
     var expanded by remember { mutableStateOf(false) }
+
+    // v10.158：按背景亮度自动配色（纯色/图片都适用）
+    val settings = vm.settings.value
+    val luma = rememberBackgroundLuma(settings)
+    val darkBg = luma < 0.55f
+    val useImageBg = settings.bgType == "image"
+
+    val titleColor = if (darkBg) Color(0xFFF4F7FC) else Color(0xFF3A4048)
+    val subColor = if (darkBg) Color(0xCCE9EEF8) else Color(0xFF5E656E)
+    val titleShadow = if (darkBg) Color(0x99000000) else Color(0x8CFFFFFF)
+    val subShadow = if (darkBg) Color(0x77000000) else Color(0x66FFFFFF)
+    val itemColor = if (darkBg) Color(0xFFF4F7FC) else Color(0xFF111111)
+    // 标题区底衬：深字配白色 scrim；白字配深色 scrim
+    val scrim = if (darkBg)
+        Brush.verticalGradient(listOf(Color(0x73000000), Color(0x00000000)))
+    else
+        Brush.verticalGradient(listOf(Color(0x99FFFFFF), Color(0x00FFFFFF)))
+
+    // 整卡按压：缩一点 + 弹簧回弹（iOS「按下有回应」的轻量版）
+    var pressed by remember { mutableStateOf(false) }
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.985f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = 820f),
+        label = "cardPress"
+    )
+    // 展开按钮箭头旋转
+    val arrowSpin by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f),
+        label = "arrowSpin"
+    )
+
     LiquidGlassCard(
         modifier = modifier
             .fillMaxWidth()
             .imePadding()
             .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    pressed = true
+                    waitForUpOrCancellation()
+                    pressed = false
+                }
+            },
+        backdropSettings = settings,
+        backdropOrigin = backdropOrigin,
+        backdropSize = backdropSize,
+        frostBoost = useImageBg
     ) {
         Column(Modifier.fillMaxWidth()) {
+            // ---- 标题行（带底衬，保证任何背景下文字都清楚）----
             Row(
-                Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .background(scrim)
+                    .padding(horizontal = 4.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("⚠️", fontSize = 16.sp)
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    // v10.143：银灰偏黑的「磨砂金属」字 —— 粗体 + 极细高光阴影（下白上暗）做磨砂凹凸感
                     Text(
                         "云端调用失败，请切换中转站",
                         fontSize = 14.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF3A4048),
+                        color = titleColor,
                         letterSpacing = 0.2.sp,
                         style = androidx.compose.ui.text.TextStyle(
                             shadow = androidx.compose.ui.graphics.Shadow(
-                                color = Color(0x8CFFFFFF),
+                                color = titleShadow,
                                 offset = androidx.compose.ui.geometry.Offset(0f, 1.2f),
                                 blurRadius = 1.6f
                             )
@@ -206,26 +293,58 @@ private fun GlassQuotaBubble(
                         if (err.isNotBlank()) err.take(90) else "点下面任一站，自动继续刚才的任务",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
-                        color = Color(0xFF5E656E),
+                        color = subColor,
                         style = androidx.compose.ui.text.TextStyle(
                             shadow = androidx.compose.ui.graphics.Shadow(
-                                color = Color(0x66FFFFFF),
+                                color = subShadow,
                                 offset = androidx.compose.ui.geometry.Offset(0f, 1f),
                                 blurRadius = 1.2f
                             )
                         )
                     )
                 }
-                TextButton(onClick = { expanded = !expanded }) {
-                    Text(if (expanded) "收起" else "展开",
-                        fontSize = 12.sp, color = Color(0xFF4D6BFE), fontWeight = FontWeight.SemiBold)
+                // 展开/收起：胶囊按钮 + 箭头旋转 + 按压高亮
+                Surface(
+                    onClick = { expanded = !expanded },
+                    shape = RoundedCornerShape(50),
+                    color = Color(0xFF4D6BFE).copy(alpha = if (expanded) 0.18f else 0.10f)
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            if (expanded) "收起" else "展开",
+                            fontSize = 12.sp,
+                            color = Color(0xFF4D6BFE),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            "⌄",
+                            fontSize = 11.sp,
+                            color = Color(0xFF4D6BFE),
+                            modifier = Modifier.graphicsLayer { rotationZ = arrowSpin }
+                        )
+                    }
                 }
             }
-            if (expanded) {
-                val st = vm.settings.value
+
+            // ---- 中转站列表：弹簧展开/收起 + 淡入 ----
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(
+                    animationSpec = spring(dampingRatio = 0.72f, stiffness = 380f),
+                    expandFrom = Alignment.Top
+                ) + fadeIn(animationSpec = tween(durationMillis = 200, delayMillis = 60)),
+                exit = shrinkVertically(
+                    animationSpec = spring(dampingRatio = 0.8f, stiffness = 500f),
+                    shrinkTowards = Alignment.Top
+                ) + fadeOut(animationSpec = tween(durationMillis = 120))
+            ) {
                 Column(Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 4.dp)) {
-                    st.providers.forEach { p ->
-                        val isCur = st.cloudProvider == p.id
+                    settings.providers.forEach { p ->
+                        val isCur = settings.cloudProvider == p.id
                         val hasKey = p.key.isNotBlank()
                         Row(
                             Modifier
@@ -240,7 +359,7 @@ private fun GlassQuotaBubble(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(p.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                                color = if (isCur) Color(0xFF4D6BFE) else Color(0xFF111111))
+                                color = if (isCur) Color(0xFF4D6BFE) else itemColor)
                             Spacer(Modifier.weight(1f))
                             val tip = when {
                                 isCur -> "当前站"

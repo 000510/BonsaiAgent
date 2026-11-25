@@ -36,12 +36,16 @@ import java.io.File
  * bgType=image 时完全不动（图片本身就有细节）。
  */
 @Composable
-fun AppBackground(s: AgentSettings, modifier: Modifier = Modifier) {
+fun AppBackground(
+    s: AgentSettings,
+    modifier: Modifier = Modifier,
+    maxSide: Int = 1440
+) {
     val fallback = Color(0xFFF7F8FC)
     when (s.bgType) {
         "image" -> {
             val path = s.bgImagePath
-            val bmp = remember(path) { decodeWallpaper(path) }
+            val bmp = remember(path, maxSide) { decodeWallpaper(path, maxSide) }
             Box(modifier.fillMaxSize().background(fallback)) {
                 if (bmp != null) {
                     Image(
@@ -98,8 +102,9 @@ private fun DrawScope.drawBlobs(base: Color) {
 
 private data class Blob(val cx: Float, val cy: Float, val r: Float, val color: Color, val alpha: Float)
 
-/** 降采样解码壁纸（手机照片动辄 4000px，直接解码会吃光内存） */
-private fun decodeWallpaper(path: String) = runCatching {
+/** 降采样解码壁纸（手机照片动辄 4000px，直接解码会吃光内存）。maxSide：
+ *  主背景用 1440；玻璃卡片的镜像层用更小的值（只占卡片大小，避免双份大图 OOM） */
+private fun decodeWallpaper(path: String, maxSide: Int = 1440) = runCatching {
     if (path.isBlank()) return@runCatching null
     val f = File(path)
     if (!f.exists() || f.length() <= 0L) return@runCatching null
@@ -107,7 +112,7 @@ private fun decodeWallpaper(path: String) = runCatching {
     BitmapFactory.decodeFile(path, bounds)
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
     var sample = 1
-    while (bounds.outWidth / sample > 1440 || bounds.outHeight / sample > 1440) sample *= 2
+    while (bounds.outWidth / sample > maxSide || bounds.outHeight / sample > maxSide) sample *= 2
     BitmapFactory.decodeFile(path, BitmapFactory.Options().apply {
         inSampleSize = sample
         inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
@@ -126,3 +131,50 @@ fun importBackgroundImage(context: Context, uri: Uri): String? = runCatching {
     if (dst.length() <= 0L) return@runCatching null
     dst.absolutePath
 }.getOrNull()
+
+/**
+ * v10.158：背景平均亮度（0=黑 / 1=白），给玻璃卡片做「自动文字配色」。
+ *  - color：直接由色值算 luma
+ *  - image：把图降采样到 ~48px 宽再遍历取平均（一次性，remember 缓存）
+ *  - 其它：走 AppBackground 的 fallback 浅色
+ * 返回 0.55 以上视为「亮背景」→ 深色字；否则视为「暗背景」→ 白字。
+ */
+@Composable
+fun rememberBackgroundLuma(s: AgentSettings): Float = remember(s.bgType, s.bgColor, s.bgImagePath) {
+    when (s.bgType) {
+        "color" -> {
+            val c = Color(s.bgColor)
+            0.299f * c.red + 0.587f * c.green + 0.114f * c.blue
+        }
+        "image" -> sampleImageLuma(s.bgImagePath)
+        else -> {
+            val c = Color(0xFFF7F8FC)
+            0.299f * c.red + 0.587f * c.green + 0.114f * c.blue
+        }
+    }
+}
+
+/** 降采样到 ~48px 宽后遍历像素求平均亮度（2304 次以内，毫秒级） */
+private fun sampleImageLuma(path: String): Float = runCatching {
+    if (path.isBlank()) return@runCatching 0.95f
+    val f = File(path)
+    if (!f.exists() || f.length() <= 0L) return@runCatching 0.95f
+    val b0 = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, b0)
+    if (b0.outWidth <= 0) return@runCatching 0.95f
+    var sample = 1
+    while (b0.outWidth / sample > 48) sample *= 2
+    val bmp = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
+        ?: return@runCatching 0.95f
+    var sum = 0.0
+    var n = 0
+    for (y in 0 until bmp.height) {
+        for (x in 0 until bmp.width) {
+            val c = bmp.getPixel(x, y)
+            sum += 0.299 * ((c shr 16) and 0xFF) + 0.587 * ((c shr 8) and 0xFF) + 0.114 * (c and 0xFF)
+            n++
+        }
+    }
+    bmp.recycle()
+    if (n == 0) 0.95f else (sum / n / 255.0).toFloat()
+}.getOrDefault(0.95f)
