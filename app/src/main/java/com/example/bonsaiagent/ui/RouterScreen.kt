@@ -52,7 +52,11 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     val listState = rememberLazyListState()
 
     Box(Modifier.fillMaxSize()) {
-    val blocked = vm.quotaBlocked.value
+    // v10.161：调试开关 —— 一键弹出「云端调用失败」气泡。
+    // 之前每次都要等模型加载完、再等云端真的报 401 才能看到气泡，调试玻璃太费时间。
+    // 这里用本地 state 直接叠加，不碰 vm.quotaBlocked 的真实逻辑（不影响切站/重试）。
+    var debugBubble by remember { mutableStateOf(false) }
+    val blocked = vm.quotaBlocked.value || debugBubble
     // v10.158：背景层（AppBackground + 对话）在窗口里的位置/尺寸。
     // 玻璃卡片靠它把背景「镜像」进卡片内部做真折射 —— 不需要全屏折射层，
     // 也不需要任何坐标换算（卡片与镜像都在卡内，天然对齐）。
@@ -157,6 +161,24 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
             .padding(top = 8.dp, end = 8.dp)
     ) {
         GenStatusBar(vm)
+    }
+
+    // v10.161：调试入口 —— 点一下直接弹「云端调用失败」气泡（不用等模型加载/云端报错）
+    Surface(
+        onClick = { debugBubble = !debugBubble },
+        modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(top = 56.dp, end = 10.dp),
+        shape = RoundedCornerShape(50),
+        color = if (debugBubble) Color(0xE64D6BFE) else Color(0xA6222222)
+    ) {
+        Text(
+            if (debugBubble) "关气泡" else "测气泡",
+            fontSize = 11.sp,
+            color = Color.White,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        )
     }
 
     }
