@@ -1,6 +1,7 @@
 package com.example.bonsaiagent.ui
 
 import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.graphics.Shader
@@ -158,15 +159,18 @@ fun LiquidGlassCard(
                             // 玻璃在任何壁纸区域都保持「透亮」。提亮系数 1.15~1.45，
                             // bgLuma<0.5 时取 1.45（本张湖景树丛 luma≈0.4 命中此档）。
                             val boost = if (bgLuma < 0.5f) 1.45f else 1.15f
-                            val boostFx = RenderEffect.createColorMatrixEffect(
-                                // ⚠️ createColorMatrixEffect 的参数类型是 android.graphics.ColorMatrix，
-                                // 不是 FloatArray（GLM 原包直接传 floatArrayOf 会编译失败）
-                                ColorMatrix(
-                                    floatArrayOf(
-                                        boost, 0f, 0f, 0f, 0f,
-                                        0f, boost, 0f, 0f, 0f,
-                                        0f, 0f, boost, 0f, 0f,
-                                        0f, 0f, 0f, 1f, 0f
+                            val boostFx = RenderEffect.createColorFilterEffect(
+                                // ⚠️ RenderEffect 没有 createColorMatrixEffect()（GLM 原包写的就是它，
+                                // 编译报 Unresolved reference）。正确 API 是
+                                // createColorFilterEffect(ColorFilter)，矩阵用 ColorMatrixColorFilter 包。
+                                ColorMatrixColorFilter(
+                                    ColorMatrix(
+                                        floatArrayOf(
+                                            boost, 0f, 0f, 0f, 0f,
+                                            0f, boost, 0f, 0f, 0f,
+                                            0f, 0f, boost, 0f, 0f,
+                                            0f, 0f, 0f, 1f, 0f
+                                        )
                                     )
                                 )
                             )
