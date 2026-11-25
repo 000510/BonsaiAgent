@@ -234,7 +234,10 @@ private fun GlassQuotaBubble(
     // v10.158：按背景亮度自动配色（纯色/图片都适用）
     val settings = vm.settings.value
     val luma = rememberBackgroundLuma(settings)
-    val darkBg = luma < 0.55f
+    // v10.162：文字配色门槛 0.55 → 0.35，与 deepBg 同步。
+    // 白玻璃档（图片 58/50/42%）下卡片有效亮度 ≈ bgLuma*0.5+0.5，
+    // bgLuma≥0.35 时 ≥0.68，深字足够清楚；只有真深背景才切白字。
+    val darkBg = luma < 0.35f
     val useImageBg = settings.bgType == "image"
 
     val titleColor = if (darkBg) Color(0xFFF4F7FC) else Color(0xFF3A4048)
@@ -243,11 +246,13 @@ private fun GlassQuotaBubble(
     val subShadow = if (darkBg) Color(0x77000000) else Color(0x66FFFFFF)
     val itemColor = if (darkBg) Color(0xFFF4F7FC) else Color(0xFF111111)
     // 标题区底衬：深字配白色 scrim；白字配深色 scrim
-    // v10.159b：深背景下 scrim 降到 28%（0x47），配合 15% 低磨砂，标题区不再一片黑
+    // v10.162：深背景档磨砂提到 22%，scrim 维持 28% 平衡可读性
+    // v10.162：磨砂压薄后标题底衬同步压轻（60%→50% 白），避免显出一道白带；
+    // 深字本身的白色描影负责可读性
     val scrim = if (darkBg)
         Brush.verticalGradient(listOf(Color(0x47000000), Color(0x00000000)))
     else
-        Brush.verticalGradient(listOf(Color(0x99FFFFFF), Color(0x00FFFFFF)))
+        Brush.verticalGradient(listOf(Color(0x80FFFFFF), Color(0x00FFFFFF)))
 
     // 整卡按压：缩一点 + 弹簧回弹（iOS「按下有回应」的轻量版）
     var pressed by remember { mutableStateOf(false) }

@@ -86,20 +86,23 @@ fun LiquidGlassCard(
     //     ↑ 阈值从 0.45 提到 0.62：实测湖水 luma=0.47 原本判不中深背景分支，磨砂仍是 40% → 卡片发灰。
     //   图片亮背景(frostBoost)：最强 58/50/42%，压住花哨壁纸保证文字
     //   普通亮背景：40/32/25%
-    val deepBg = bgLuma < 0.62f
+    // v10.162：深背景门槛 0.62 → 0.35。0.62 会把中间调照片（如湖面 luma≈0.47）
+    // 误判成深背景，磨砂掉到 15% + 黑 scrim → 卡片近不透明发黑（v10.161 实测）。
+    // 中间调一律走白玻璃+深字；只有夜景/黑底这类真深色（<0.35）才走深背景档。
+    val deepBg = bgLuma < 0.35f
     val frostTop = when {
-        deepBg -> Color(0x26FFFFFF)      // 白 15%
-        frostBoost -> Color(0x94FFFFFF)  // 58%
+        deepBg -> Color(0x38FFFFFF)      // 白 22%
+        frostBoost -> Color(0x47FFFFFF)  // 28%（v10.162：58% 太厚等于白漆，湖水透不出）
         else -> Color(0x66FFFFFF)        // 40%
     }
     val frostMid = when {
-        deepBg -> Color(0x21F0F4FF)      // 13%
-        frostBoost -> Color(0x80F4F7FF)  // 50%
+        deepBg -> Color(0x30F0F4FF)      // 19%
+        frostBoost -> Color(0x3DF4F7FF)  // 24%
         else -> Color(0x52F4F7FF)        // 32%
     }
     val frostBot = when {
-        deepBg -> Color(0x1CE4EBFF)      // 11%
-        frostBoost -> Color(0x6BE3EAFF)  // 42%
+        deepBg -> Color(0x29E4EBFF)      // 16%
+        frostBoost -> Color(0x33E3EAFF)  // 20%
         else -> Color(0x40E3EAFF)        // 25%
     }
 
