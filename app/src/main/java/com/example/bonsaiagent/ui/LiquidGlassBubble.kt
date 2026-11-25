@@ -1,14 +1,21 @@
 package com.example.bonsaiagent.ui
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
@@ -19,37 +26,38 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 
 /**
- * v10.151：液态玻璃彻底重写。
- *
- * 旧架构（v10.145~v10.150）：AGSL shader 挂在全屏折射层上，按测量的卡片矩形画玻璃。
- * 四个版本实测都有一条与卡片错位的矩形色带（左右边缘恒定 x≈118/1097、顶部贴标题行
- * 底部、收缩/展开都在），颜色始终等于玻璃色 —— 说明玻璃被按某个错误矩形多画了一层，
- * 且这条测量/合成链路在本机上有无法从代码侧定位的歧义。按用户决定整条删掉重写。
- *
- * 新架构：**玻璃 100% 画在卡片内部** —— clip 到卡片形状，物理上不可能与卡片错位：
- *   磨砂渐变 + 顶部内侧高光 + 底部内侧暗边 + 细白边 + 投影。
- * 视觉对应 iOS 浅色玻璃配方（blur + 白渐变 + 内高光 + 细边 + 阴影）。
- * 代价是放弃了全屏边缘折射（纯色背景上本来也几乎看不出来；图片背景下想要
- * 完整折射效果可后续以「玻璃后面内容复制进卡片」的方式再实现，不再走全屏层）。
+ * v10.155 诊断版：磨砂 = 纯白 @ 可调透明度（诊断面板滑条控制）。
+ * 平坦单色，排除渐变/染色干扰，专心定位色块来源。
+ * 诊断完成后恢复正式版：磨砂换回垂直渐变，磨砂层叠加步骤见 v10.151 说明。
  */
 @Composable
 fun LiquidGlassCard(
     modifier: Modifier = Modifier,
     corner: Dp = 26.dp,
     pad: Dp = 9.dp,
+    frostAlpha: Float = 0.30f,
+    backdrop: (@Composable BoxScope.() -> Unit)? = null,
+    backdropOrigin: Offset = Offset.Zero,
+    backdropSize: IntSize = IntSize.Zero,
     content: @Composable BoxScope.() -> Unit
 ) {
     val density = LocalDensity.current
     val radiusPx = with(density) { corner.toPx() }
     val shape = RoundedCornerShape(corner)
+    val blurOn = Build.VERSION.SDK_INT >= 31 && backdrop != null && backdropSize != IntSize.Zero
+    var cardOrigin by remember { mutableStateOf(Offset.Zero) }
 
-    Box(modifier) {
-        // ---- 投影：中性黑，画在卡片外沿 ----
+    Box(modifier.onGloballyPositioned { cardOrigin = it.positionInWindow() }) {
+        // ---- 0) 投影：中性黑 ----
         Box(
             Modifier
                 .matchParentSize()
@@ -62,86 +70,106 @@ fun LiquidGlassCard(
                 )
         )
 
-        // ---- 玻璃体：全部 clip 进卡片形状，任何设备上都不可能错位 ----
+        // ---- 1) 玻璃体 ----
         Box(
             Modifier
                 .matchParentSize()
                 .clip(shape)
-                .drawBehind {
-                    // 以下全部对应 Pack-v2 / glass.frag 的质感要素（参数表默认值，×min(dpr,2)），
-                    // 只是改为「卡片内部描边」的实现方式，不再依赖全屏折射层：
-                    val stroke = 2.dp.toPx()
-                    val inset = stroke / 2f
-                    val r = CornerRadius(radiusPx - stroke, radiusPx - stroke)
-                    val rect = Rect(inset, inset, size.width - inset, size.height - inset)
-
-                    // 1) 顶部内侧高光弧：玻璃上缘的受光
-                    drawRoundRect(
-                        brush = Brush.verticalGradient(
-                            listOf(Color.White.copy(alpha = 0.5f), Color.Transparent)
-                        ),
-                        topLeft = rect.topLeft, size = rect.size, cornerRadius = r,
-                        style = Stroke(width = stroke)
-                    )
-                    // 2) 底部内侧暗边：玻璃厚度感
-                    drawRoundRect(
-                        brush = Brush.verticalGradient(
-                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.05f))
-                        ),
-                        topLeft = rect.topLeft, size = rect.size, cornerRadius = r,
-                        style = Stroke(width = stroke)
-                    )
-                    // 3) 菲涅尔边缘光（定向）：原作 lightAng=-2.2rad、light=0.35 —— 光源在左，
-                    //    左缘亮、右缘留一点次级反光。用横向渐变描边近似。
-                    drawRoundRect(
-                        brush = Brush.horizontalGradient(
-                            listOf(
-                                Color.White.copy(alpha = 0.30f),
-                                Color.Transparent,
-                                Color.Transparent,
-                                Color.White.copy(alpha = 0.10f)
-                            )
-                        ),
-                        topLeft = rect.topLeft, size = rect.size, cornerRadius = r,
-                        style = Stroke(width = stroke)
-                    )
-                    // 4) 色散彩边（原作 chroma=12 的近似）：外侧一圈红晕 + 内一圈蓝晕，各 1.5px
-                    val ca = 1.5.dp.toPx()
-                    drawRoundRect(
-                        color = Color(0x12FF4646), // 红晕
-                        topLeft = Offset(rect.left - ca, rect.top - ca),
-                        size = Size(rect.width + ca * 2, rect.height + ca * 2),
-                        cornerRadius = CornerRadius(radiusPx, radiusPx),
-                        style = Stroke(width = ca)
-                    )
-                    drawRoundRect(
-                        color = Color(0x12465AFF), // 蓝晕
-                        topLeft = Offset(rect.left + ca, rect.top + ca),
-                        size = Size(rect.width - ca * 2, rect.height - ca * 2),
-                        cornerRadius = CornerRadius(radiusPx - ca * 2, radiusPx - ca * 2),
-                        style = Stroke(width = ca)
-                    )
+        ) {
+            // 1a) 背景镜像（可选）：全屏背景平移对齐后整体模糊 ——
+            //     磨砂透出的是"糊掉的背景"，玻璃感的物理前提；开启后磨砂
+            //     合成的是卡内镜像而非背后内容，色块无从透出。
+            if (blurOn) {
+                val dpx = with(density) { backdropSize.width.toDp() }
+                val dpy = with(density) { backdropSize.height.toDp() }
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .blur(22.dp)
+                ) {
+                    Box(
+                        Modifier
+                            .size(dpx, dpy)
+                            .graphicsLayer {
+                                translationX = backdropOrigin.x - cardOrigin.x
+                                translationY = backdropOrigin.y - cardOrigin.y
+                            }
+                    ) {
+                        backdrop?.invoke(this)
+                    }
                 }
-                .background(
-                    // v10.153：磨砂底提到近不透明（白 95/91/87%），只留约一成背景透色。
-                    // 依据 v10.152 红卡探针：色块在红卡上逐像素完全消失（带内外均为 236,103,98）
-                    // => 它不在卡片之上，而是「透过半透明磨砂看到的、卡片之下某个接近纯白的东西」。
-                    // 内容子树 / drawBehind 描边 / 输入栏 / 主题白色 Surface 均已逐行排查干净，
-                    // 四版玻璃（含无 shader 的 v10.151 纯 Kotlin 绘制）都复现 => 本机合成层怪癖。
-                    // 务实收口：透色压到一成，穿透强度等比衰减到肉眼不可见，玻璃质感要素全保留。
-                    // 若仍隐约可见：把下面三行全部改成 0xFFFFFFFF（100% 不透明，物理上必消失）。
-                    Brush.verticalGradient(
-                        listOf(
-                            Color(0xF2FFFFFF),   // 白 95%
-                            Color(0xE8F4F7FF),   // 91%
-                            Color(0xDEE3EAFF)    // 87%
+            }
+
+            // 1b) 磨砂层：纯白 @ frostAlpha（诊断可调）
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Color.White.copy(alpha = frostAlpha))
+                    .drawBehind {
+                        // Pack-v2 质感要素（卡片内描边实现）：
+                        val stroke = 2.dp.toPx()
+                        val inset = stroke / 2f
+                        val r = CornerRadius(radiusPx - stroke, radiusPx - stroke)
+                        val rect = Rect(inset, inset, size.width - inset, size.height - inset)
+
+                        // 顶部内侧高光弧
+                        drawRoundRect(
+                            brush = Brush.verticalGradient(
+                                listOf(Color.White.copy(alpha = 0.5f), Color.Transparent)
+                            ),
+                            topLeft = rect.topLeft, size = rect.size, cornerRadius = r,
+                            style = Stroke(width = stroke)
                         )
-                    )
-                )
-                .border(1.dp, Color.White.copy(alpha = 0.85f), shape) // 原作 edgeW1.5 / edgeOp0.85
+                        // 底部内侧暗边
+                        drawRoundRect(
+                            brush = Brush.verticalGradient(
+                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.05f))
+                            ),
+                            topLeft = rect.topLeft, size = rect.size, cornerRadius = r,
+                            style = Stroke(width = stroke)
+                        )
+                        // 菲涅尔边缘光（定向，光源在左）
+                        drawRoundRect(
+                            brush = Brush.horizontalGradient(
+                                listOf(
+                                    Color.White.copy(alpha = 0.30f),
+                                    Color.Transparent,
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.10f)
+                                )
+                            ),
+                            topLeft = rect.topLeft, size = rect.size, cornerRadius = r,
+                            style = Stroke(width = stroke)
+                        )
+                        // 色散彩边（外红内蓝，各 1.5px）
+                        val ca = 1.5.dp.toPx()
+                        drawRoundRect(
+                            color = Color(0x12FF4646),
+                            topLeft = Offset(rect.left - ca, rect.top - ca),
+                            size = Size(rect.width + ca * 2, rect.height + ca * 2),
+                            cornerRadius = CornerRadius(radiusPx, radiusPx),
+                            style = Stroke(width = ca)
+                        )
+                        drawRoundRect(
+                            color = Color(0x12465AFF),
+                            topLeft = Offset(rect.left + ca, rect.top + ca),
+                            size = Size(rect.width - ca * 2, rect.height - ca * 2),
+                            cornerRadius = CornerRadius(radiusPx - ca * 2, radiusPx - ca * 2),
+                            style = Stroke(width = ca)
+                        )
+                    }
+            )
+        }
+
+        // ---- 2) 细白边框 ----
+        Box(
+            Modifier
+                .matchParentSize()
+                .border(1.dp, Color.White.copy(alpha = 0.85f), shape)
         )
 
-        // ---- 内容层 ----
+        // ---- 3) 内容层 ----
         Box(Modifier.fillMaxWidth().padding(pad), content = content)
     }
 }
+
