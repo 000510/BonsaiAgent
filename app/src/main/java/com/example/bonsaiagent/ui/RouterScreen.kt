@@ -48,6 +48,10 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     var dbgMessages by remember { mutableStateOf(true) }
     var dbgTitle by remember { mutableStateOf(true) }
     var dbgEmoji by remember { mutableStateOf(true) }
+    var dbgShadow by remember { mutableStateOf(true) }
+    var dbgStrokes by remember { mutableStateOf(true) }
+    var dbgBorder by remember { mutableStateOf(true) }
+    var dbgPill by remember { mutableStateOf(true) }
     var dbgFrostAlpha by remember { mutableStateOf(0.30f) }
 
     Box(
@@ -138,7 +142,11 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
             modifier = Modifier.align(Alignment.BottomCenter),
             showTitle = dbgTitle,
             showEmoji = dbgEmoji,
-            frostAlpha = dbgFrostAlpha
+            showPill = dbgPill,
+            frostAlpha = dbgFrostAlpha,
+            showShadow = dbgShadow,
+            showStrokes = dbgStrokes,
+            showBorder = dbgBorder
         )
     }
 
@@ -166,6 +174,15 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
                     DebugToggle("标题行", dbgTitle) { dbgTitle = !dbgTitle }
                     Spacer(Modifier.width(6.dp))
                     DebugToggle("表情", dbgEmoji) { dbgEmoji = !dbgEmoji }
+                }
+                Row {
+                    DebugToggle("阴影", dbgShadow) { dbgShadow = !dbgShadow }
+                    Spacer(Modifier.width(6.dp))
+                    DebugToggle("描边", dbgStrokes) { dbgStrokes = !dbgStrokes }
+                    Spacer(Modifier.width(6.dp))
+                    DebugToggle("边框", dbgBorder) { dbgBorder = !dbgBorder }
+                    Spacer(Modifier.width(6.dp))
+                    DebugToggle("药丸", dbgPill) { dbgPill = !dbgPill }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -253,7 +270,11 @@ private fun GlassQuotaBubble(
     modifier: Modifier = Modifier,
     showTitle: Boolean = true,
     showEmoji: Boolean = true,
-    frostAlpha: Float = 0.30f
+    showPill: Boolean = true,
+    frostAlpha: Float = 0.30f,
+    showShadow: Boolean = true,
+    showStrokes: Boolean = true,
+    showBorder: Boolean = true
 ) {
     var expanded by remember { mutableStateOf(false) }
     LiquidGlassCard(
@@ -261,7 +282,10 @@ private fun GlassQuotaBubble(
             .fillMaxWidth()
             .imePadding()
             .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp),
-        frostAlpha = frostAlpha
+        frostAlpha = frostAlpha,
+        showShadow = showShadow,
+        showStrokes = showStrokes,
+        showBorder = showBorder
     ) {
         Column(Modifier.fillMaxWidth()) {
             if (showTitle) Row(
@@ -317,7 +341,7 @@ private fun GlassQuotaBubble(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
                                 .background(
-                                    if (isCur) Color(0xFF4D6BFE).copy(alpha = 0.10f)
+                                    if (isCur && showPill) Color(0xFF4D6BFE).copy(alpha = 0.10f)
                                     else Color.Transparent
                                 )
                                 .clickable { if (!isCur && hasKey) vm.retryCloudWith(p.id) }

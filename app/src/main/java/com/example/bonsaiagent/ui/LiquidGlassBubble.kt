@@ -45,6 +45,9 @@ fun LiquidGlassCard(
     corner: Dp = 26.dp,
     pad: Dp = 9.dp,
     frostAlpha: Float = 0.30f,
+    showShadow: Boolean = true,
+    showStrokes: Boolean = true,
+    showBorder: Boolean = true,
     backdrop: (@Composable BoxScope.() -> Unit)? = null,
     backdropOrigin: Offset = Offset.Zero,
     backdropSize: IntSize = IntSize.Zero,
@@ -58,7 +61,7 @@ fun LiquidGlassCard(
 
     Box(modifier.onGloballyPositioned { cardOrigin = it.positionInWindow() }) {
         // ---- 0) 投影：中性黑 ----
-        Box(
+        if (showShadow) Box(
             Modifier
                 .matchParentSize()
                 .shadow(
@@ -105,7 +108,7 @@ fun LiquidGlassCard(
                 Modifier
                     .matchParentSize()
                     .background(Color.White.copy(alpha = frostAlpha))
-                    .drawBehind {
+                    .then(if (showStrokes) Modifier.drawBehind {
                         // Pack-v2 质感要素（卡片内描边实现）：
                         val stroke = 2.dp.toPx()
                         val inset = stroke / 2f
@@ -157,12 +160,12 @@ fun LiquidGlassCard(
                             cornerRadius = CornerRadius(radiusPx - ca * 2, radiusPx - ca * 2),
                             style = Stroke(width = ca)
                         )
-                    }
+                    } else Modifier)
             )
         }
 
         // ---- 2) 细白边框 ----
-        Box(
+        if (showBorder) Box(
             Modifier
                 .matchParentSize()
                 .border(1.dp, Color.White.copy(alpha = 0.85f), shape)
