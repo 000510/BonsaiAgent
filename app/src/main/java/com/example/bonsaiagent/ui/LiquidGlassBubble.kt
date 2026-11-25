@@ -1,5 +1,6 @@
 package com.example.bonsaiagent.ui
 
+import android.graphics.ColorMatrix
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.graphics.Shader
@@ -150,9 +151,28 @@ fun LiquidGlassCard(
                             // v10.159：blur 24dp→10dp。24dp(48px) 把背景糊成纯色（实测行内 std≈0），
                             // 玻璃看起来就是一块灰卡；10dp(20px) 还能看出背景轮廓与明暗，才像玻璃。
                             val blurFx = RenderEffect.createBlurEffect(10f * scale, 10f * scale, Shader.TileMode.CLAMP)
-                            // 先模糊（inner）再折射（outer）
+                            // v10.163：iOS 液态玻璃的自适应提亮（Apple 材质的关键拼图）。
+                            // 玻璃的颜色 = 背后内容的颜色；卡片后面恰好是照片的暗区时
+                            // （如这张湖景的树丛），再薄的磨砂也会显得黑。
+                            // 苹果的做法是按背景亮度自适应提亮：暗区把透进来的光拉亮，
+                            // 玻璃在任何壁纸区域都保持「透亮」。提亮系数 1.15~1.45，
+                            // bgLuma<0.5 时取 1.45（本张湖景树丛 luma≈0.4 命中此档）。
+                            val boost = if (bgLuma < 0.5f) 1.45f else 1.15f
+                            val boostFx = RenderEffect.createColorMatrixEffect(
+                                // ⚠️ createColorMatrixEffect 的参数类型是 android.graphics.ColorMatrix，
+                                // 不是 FloatArray（GLM 原包直接传 floatArrayOf 会编译失败）
+                                ColorMatrix(
+                                    floatArrayOf(
+                                        boost, 0f, 0f, 0f, 0f,
+                                        0f, boost, 0f, 0f, 0f,
+                                        0f, 0f, boost, 0f, 0f,
+                                        0f, 0f, 0f, 1f, 0f
+                                    )
+                                )
+                            )
+                            // 管线：镜像 → 模糊 → 提亮 → 折射（createChainEffect 外层后应用）
                             renderEffect = RenderEffect
-                                .createChainEffect(refractFx, blurFx)
+                                .createChainEffect(refractFx, RenderEffect.createChainEffect(boostFx, blurFx))
                                 .asComposeRenderEffect()
                         }
                         // clipToBounds 在内：镜像按屏幕尺寸布局，超出卡片的部分先裁掉，blur 只算卡片面积
