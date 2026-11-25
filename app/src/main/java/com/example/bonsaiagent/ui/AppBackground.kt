@@ -154,7 +154,10 @@ fun rememberBackgroundLuma(s: AgentSettings): Float = remember(s.bgType, s.bgCol
     }
 }
 
-/** 降采样到 ~48px 宽后遍历像素求平均亮度（2304 次以内，毫秒级） */
+/** 降采样到 ~48px 宽后遍历像素求平均亮度（2304 次以内，毫秒级）。
+ *  v10.159：只采「下半部分」——液态玻璃气泡固定在屏幕底部，
+ *  整图平均亮度（含上方蓝天）会明显高于卡片背后的实际区域，
+ *  导致「深背景低磨砂」判不中（实测湖水 luma=0.47 而整图≈0.6）。 */
 private fun sampleImageLuma(path: String): Float = runCatching {
     if (path.isBlank()) return@runCatching 0.95f
     val f = File(path)
@@ -168,7 +171,8 @@ private fun sampleImageLuma(path: String): Float = runCatching {
         ?: return@runCatching 0.95f
     var sum = 0.0
     var n = 0
-    for (y in 0 until bmp.height) {
+    val y0 = (bmp.height * 0.55f).toInt().coerceIn(0, bmp.height - 1)
+    for (y in y0 until bmp.height) {
         for (x in 0 until bmp.width) {
             val c = bmp.getPixel(x, y)
             sum += 0.299 * ((c shr 16) and 0xFF) + 0.587 * ((c shr 8) and 0xFF) + 0.114 * (c and 0xFF)

@@ -81,24 +81,24 @@ fun LiquidGlassCard(
     val mirrorOn = Build.VERSION.SDK_INT >= 31 &&
         backdropSettings != null && backdropSize != IntSize.Zero && shader != null
 
-    // 磨砂强度按背景亮度分三档（v10.159）：
-    //   深背景(luami<0.45)：白度很低(12/10/8%)，让背景清晰透出，玻璃靠边缘光+白边定义 —— iOS 深色玻璃做法
-    //   图片亮背景(frostBoost)：最强(58/50/42%)，压住花哨壁纸保证文字
+    // 磨砂强度按背景亮度分档（v10.159b）：
+    //   偏暗背景(luma<0.62)：白度 15/13/11%，背景清晰透出，玻璃靠边缘光+白边定义 —— iOS 深色玻璃做法。
+    //     ↑ 阈值从 0.45 提到 0.62：实测湖水 luma=0.47 原本判不中深背景分支，磨砂仍是 40% → 卡片发灰。
+    //   图片亮背景(frostBoost)：最强 58/50/42%，压住花哨壁纸保证文字
     //   普通亮背景：40/32/25%
-    // v10.158 的教训：深色图片上一律 40% 白磨砂 → 卡片变成一块灰，用户反馈「这是什么」。
-    val deepBg = bgLuma < 0.45f
+    val deepBg = bgLuma < 0.62f
     val frostTop = when {
-        deepBg -> Color(0x1FFFFFFF)      // 白 12%
+        deepBg -> Color(0x26FFFFFF)      // 白 15%
         frostBoost -> Color(0x94FFFFFF)  // 58%
         else -> Color(0x66FFFFFF)        // 40%
     }
     val frostMid = when {
-        deepBg -> Color(0x1AF0F4FF)      // 10%
+        deepBg -> Color(0x21F0F4FF)      // 13%
         frostBoost -> Color(0x80F4F7FF)  // 50%
         else -> Color(0x52F4F7FF)        // 32%
     }
     val frostBot = when {
-        deepBg -> Color(0x14E4EBFF)      // 8%
+        deepBg -> Color(0x1CE4EBFF)      // 11%
         frostBoost -> Color(0x6BE3EAFF)  // 42%
         else -> Color(0x40E3EAFF)        // 25%
     }
