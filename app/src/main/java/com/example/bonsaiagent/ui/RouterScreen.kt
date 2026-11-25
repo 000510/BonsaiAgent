@@ -18,14 +18,8 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bonsaiagent.ChatMessage
@@ -39,30 +33,9 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
 
     Box(Modifier.fillMaxSize()) {
     val blocked = vm.quotaBlocked.value
-    // v10.154：背景层（bg + 对话内容）在窗口里的位置/尺寸 ——
-    // 卡内模糊镜像按这个偏移平移，与全局背景逐像素对齐
-    val bgFrame = remember { mutableStateOf(Rect.Zero) }
-
-    // ===== v10.155 诊断开关（定位色块用，定位完成后整体删除）=====
-    var dbgInput by remember { mutableStateOf(true) }
-    var dbgMessages by remember { mutableStateOf(true) }
-    var dbgTitle by remember { mutableStateOf(true) }
-    var dbgEmoji by remember { mutableStateOf(true) }
-    var dbgShadow by remember { mutableStateOf(true) }
-    var dbgStrokes by remember { mutableStateOf(true) }
-    var dbgBorder by remember { mutableStateOf(true) }
-    var dbgPill by remember { mutableStateOf(true) }
-    var dbgFrostAlpha by remember { mutableStateOf(0.30f) }
-
     Box(
         Modifier
             .matchParentSize()
-            .onGloballyPositioned {
-                bgFrame.value = Rect(
-                    it.positionInWindow(),
-                    Size(it.size.width.toFloat(), it.size.height.toFloat())
-                )
-            }
             // v10.151：Android 12/12L 上弹窗出现时整层磨砂兜底（iOS 弹层同款：
             // 背景糊掉 + 卡片自带磨砂底 = 真磨砂玻璃）；
             // 13+ 玻璃自身已带磨砂，不再需要整层处理。
@@ -72,11 +45,11 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
                     Modifier.blur(22.dp) else Modifier
             )
     ) {
-    RouterChatBody(vm, listState, dbgMessages)
+    RouterChatBody(vm, listState)
     }
 
     // v10.99：输入框 overlay 贴底 + imePadding，键盘弹出只推输入框；加投影
-    if (dbgInput) Surface(
+    Surface(
         modifier = Modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
@@ -139,14 +112,7 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     if (blocked) {
         GlassQuotaBubble(
             vm = vm,
-            modifier = Modifier.align(Alignment.BottomCenter),
-            showTitle = dbgTitle,
-            showEmoji = dbgEmoji,
-            showPill = dbgPill,
-            frostAlpha = dbgFrostAlpha,
-            showShadow = dbgShadow,
-            showStrokes = dbgStrokes,
-            showBorder = dbgBorder
+            modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
 
@@ -159,69 +125,6 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
         GenStatusBar(vm)
     }
 
-    // ===== v10.155 诊断面板（定位完成后整体删除）=====
-    Box(Modifier.align(Alignment.TopStart).padding(top = 60.dp, start = 4.dp)) {
-        Surface(
-            color = Color(0xCC222222),
-            shape = RoundedCornerShape(10.dp)
-        ) {
-            Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                Row {
-                    DebugToggle("输入栏", dbgInput) { dbgInput = !dbgInput }
-                    Spacer(Modifier.width(6.dp))
-                    DebugToggle("对话", dbgMessages) { dbgMessages = !dbgMessages }
-                    Spacer(Modifier.width(6.dp))
-                    DebugToggle("标题行", dbgTitle) { dbgTitle = !dbgTitle }
-                    Spacer(Modifier.width(6.dp))
-                    DebugToggle("表情", dbgEmoji) { dbgEmoji = !dbgEmoji }
-                }
-                Row {
-                    DebugToggle("阴影", dbgShadow) { dbgShadow = !dbgShadow }
-                    Spacer(Modifier.width(6.dp))
-                    DebugToggle("描边", dbgStrokes) { dbgStrokes = !dbgStrokes }
-                    Spacer(Modifier.width(6.dp))
-                    DebugToggle("边框", dbgBorder) { dbgBorder = !dbgBorder }
-                    Spacer(Modifier.width(6.dp))
-                    DebugToggle("药丸", dbgPill) { dbgPill = !dbgPill }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "磨砂α",
-                        fontSize = 10.sp,
-                        color = Color.White,
-                        modifier = Modifier.padding(end = 6.dp)
-                    )
-                    Slider(
-                        value = dbgFrostAlpha,
-                        onValueChange = { dbgFrostAlpha = it },
-                        valueRange = 0f..1f,
-                        modifier = Modifier.width(160.dp).height(28.dp)
-                    )
-                    Text(
-                        "%.2f".format(dbgFrostAlpha),
-                        fontSize = 10.sp,
-                        color = Color.White,
-                        modifier = Modifier.padding(start = 6.dp)
-                    )
-                }
-            }
-        }
-    }
-    }
-}
-
-@Composable
-private fun DebugToggle(label: String, on: Boolean, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-        modifier = Modifier.height(26.dp)
-    ) {
-        Text(
-            if (on) "$label:开" else "$label:关",
-            fontSize = 10.sp,
-            color = if (on) Color(0xFF7FD07F) else Color(0xFFE07070)
-        )
     }
 }
 
@@ -230,10 +133,9 @@ private fun DebugToggle(label: String, on: Boolean, onClick: () -> Unit) {
  * 真实层与（若启用的）卡内镜像共用同一份代码和同一个滚动状态。
  */
 @Composable
-private fun RouterChatBody(vm: MainViewModel, listState: LazyListState, showMessages: Boolean = true) {
+private fun RouterChatBody(vm: MainViewModel, listState: LazyListState) {
     // v10.142：界面背景（自定义图片/纯色）—— 液态玻璃折射的就是这一层
     AppBackground(vm.settings.value)
-    if (!showMessages) return
     // v10.99：消息区固定不动，不随键盘上移（键盘弹出只推输入框）
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         // v10.107：WORK 艺术字标识——证明当前是 Agent 模式（替代原返回入口/路由说明）
@@ -267,33 +169,22 @@ private fun RouterChatBody(vm: MainViewModel, listState: LazyListState, showMess
 @Composable
 private fun GlassQuotaBubble(
     vm: MainViewModel,
-    modifier: Modifier = Modifier,
-    showTitle: Boolean = true,
-    showEmoji: Boolean = true,
-    showPill: Boolean = true,
-    frostAlpha: Float = 0.30f,
-    showShadow: Boolean = true,
-    showStrokes: Boolean = true,
-    showBorder: Boolean = true
+    modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
     LiquidGlassCard(
         modifier = modifier
             .fillMaxWidth()
             .imePadding()
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp),
-        frostAlpha = frostAlpha,
-        showShadow = showShadow,
-        showStrokes = showStrokes,
-        showBorder = showBorder
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 104.dp)
     ) {
         Column(Modifier.fillMaxWidth()) {
-            if (showTitle) Row(
+            Row(
                 Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (showEmoji) Text("⚠️", fontSize = 16.sp)
-                if (showEmoji) Spacer(Modifier.width(8.dp))
+                Text("⚠️", fontSize = 16.sp)
+                Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     // v10.143：银灰偏黑的「磨砂金属」字 —— 粗体 + 极细高光阴影（下白上暗）做磨砂凹凸感
                     Text(
@@ -341,7 +232,7 @@ private fun GlassQuotaBubble(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
                                 .background(
-                                    if (isCur && showPill) Color(0xFF4D6BFE).copy(alpha = 0.10f)
+                                    if (isCur) Color(0xFF4D6BFE).copy(alpha = 0.10f)
                                     else Color.Transparent
                                 )
                                 .clickable { if (!isCur && hasKey) vm.retryCloudWith(p.id) }
