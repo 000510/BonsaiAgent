@@ -379,9 +379,11 @@ private fun GlassQuotaBubble(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
+                                // v10.164：清透玻璃下给每行加白色胶囊底（非当前站 20% 白），
+                                // 保证深字在深色壁纸区域也可读；当前站用品牌蓝 12%
                                 .background(
-                                    if (isCur) Color(0xFF4D6BFE).copy(alpha = 0.10f)
-                                    else Color.Transparent
+                                    if (isCur) Color(0xFF4D6BFE).copy(alpha = 0.12f)
+                                    else Color.White.copy(alpha = 0.20f)
                                 )
                                 .clickable { if (!isCur && hasKey) vm.retryCloudWith(p.id) }
                                 .padding(horizontal = 10.dp, vertical = 8.dp),
