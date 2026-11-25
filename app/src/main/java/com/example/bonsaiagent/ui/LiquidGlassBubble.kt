@@ -64,6 +64,7 @@ fun LiquidGlassCard(
     backdropSettings: AgentSettings? = null,
     backdropOrigin: Offset = Offset.Zero,
     backdropSize: IntSize = IntSize.Zero,
+    bgLuma: Float = 0.95f,
     frostBoost: Boolean = false,
     content: @Composable BoxScope.() -> Unit
 ) {
@@ -80,10 +81,27 @@ fun LiquidGlassCard(
     val mirrorOn = Build.VERSION.SDK_INT >= 31 &&
         backdropSettings != null && backdropSize != IntSize.Zero && shader != null
 
-    // 磨砂强度：图片背景下加强，保证文字对比
-    val frostTop = if (frostBoost) Color(0x94FFFFFF) else Color(0x66FFFFFF) // 58% / 40%
-    val frostMid = if (frostBoost) Color(0x80F4F7FF) else Color(0x52F4F7FF) // 50% / 32%
-    val frostBot = if (frostBoost) Color(0x6BE3EAFF) else Color(0x40E3EAFF) // 42% / 25%
+    // 磨砂强度按背景亮度分三档（v10.159）：
+    //   深背景(luami<0.45)：白度很低(12/10/8%)，让背景清晰透出，玻璃靠边缘光+白边定义 —— iOS 深色玻璃做法
+    //   图片亮背景(frostBoost)：最强(58/50/42%)，压住花哨壁纸保证文字
+    //   普通亮背景：40/32/25%
+    // v10.158 的教训：深色图片上一律 40% 白磨砂 → 卡片变成一块灰，用户反馈「这是什么」。
+    val deepBg = bgLuma < 0.45f
+    val frostTop = when {
+        deepBg -> Color(0x1FFFFFFF)      // 白 12%
+        frostBoost -> Color(0x94FFFFFF)  // 58%
+        else -> Color(0x66FFFFFF)        // 40%
+    }
+    val frostMid = when {
+        deepBg -> Color(0x1AF0F4FF)      // 10%
+        frostBoost -> Color(0x80F4F7FF)  // 50%
+        else -> Color(0x52F4F7FF)        // 32%
+    }
+    val frostBot = when {
+        deepBg -> Color(0x14E4EBFF)      // 8%
+        frostBoost -> Color(0x6BE3EAFF)  // 42%
+        else -> Color(0x40E3EAFF)        // 25%
+    }
 
     Box(modifier.onGloballyPositioned { cardOrigin = it.positionInWindow() }) {
         // ---- 0) 手绘环形投影：只在卡片轮廓外侧，物理上进不了内部 ----
@@ -124,9 +142,11 @@ fun LiquidGlassCard(
                             sh.setFloatUniform("uRes", size.width, size.height)
                             sh.setFloatUniform("uRadius", radiusPx)
                             // (strength 折射, chroma 色散, blur 模糊px, band 折射带宽px)，全部 ×dpr
-                            sh.setFloatUniform("uP", 46f * scale, 10f * scale, 1.0f * scale, 56f * scale)
+                            sh.setFloatUniform("uP", 52f * scale, 10f * scale, 1.0f * scale, 56f * scale)
                             val refractFx = RenderEffect.createRuntimeShaderEffect(sh, "uTex")
-                            val blurFx = RenderEffect.createBlurEffect(24f * scale, 24f * scale, Shader.TileMode.CLAMP)
+                            // v10.159：blur 24dp→10dp。24dp(48px) 把背景糊成纯色（实测行内 std≈0），
+                            // 玻璃看起来就是一块灰卡；10dp(20px) 还能看出背景轮廓与明暗，才像玻璃。
+                            val blurFx = RenderEffect.createBlurEffect(10f * scale, 10f * scale, Shader.TileMode.CLAMP)
                             // 先模糊（inner）再折射（outer）
                             renderEffect = RenderEffect
                                 .createChainEffect(refractFx, blurFx)

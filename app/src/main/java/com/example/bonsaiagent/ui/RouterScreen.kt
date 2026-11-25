@@ -221,8 +221,9 @@ private fun GlassQuotaBubble(
     val subShadow = if (darkBg) Color(0x77000000) else Color(0x66FFFFFF)
     val itemColor = if (darkBg) Color(0xFFF4F7FC) else Color(0xFF111111)
     // 标题区底衬：深字配白色 scrim；白字配深色 scrim
+    // v10.159：深背景下 scrim 从 45% 降到 35%（配合低白度磨砂，避免标题区一片黑）
     val scrim = if (darkBg)
-        Brush.verticalGradient(listOf(Color(0x73000000), Color(0x00000000)))
+        Brush.verticalGradient(listOf(Color(0x59000000), Color(0x00000000)))
     else
         Brush.verticalGradient(listOf(Color(0x99FFFFFF), Color(0x00FFFFFF)))
 
@@ -260,6 +261,7 @@ private fun GlassQuotaBubble(
         backdropSettings = settings,
         backdropOrigin = backdropOrigin,
         backdropSize = backdropSize,
+        bgLuma = luma,
         frostBoost = useImageBg
     ) {
         Column(Modifier.fillMaxWidth()) {
