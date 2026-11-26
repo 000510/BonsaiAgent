@@ -70,11 +70,17 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
                     Size(it.size.width.toFloat(), it.size.height.toFloat())
                 )
             }
-            // v10.151：Android 12/12L 上弹窗出现时整层磨砂兜底（iOS 弹层同款：
-            // 背景糊掉 + 卡片自带磨砂底 = 真磨砂玻璃）；
-            // 13+ 玻璃自身已带磨砂，不再需要整层处理。
+            // v10.167：气泡出现时整层背景模糊（iOS 弹层/通知中心同款），API 31+ 全开。
+            // 调研结论（详见 00_交接说明 v10.167 节）：
+            // - Apple 液态玻璃的地基是「背后内容实时模糊」，边缘折射只是加分项；
+            // - 本机所有含 AGSL RuntimeShader 的镜像管线都渲染黑层（v10.161/163/165 实证），
+            //   而纯 Modifier.blur（单一 RenderEffect，无 shader、无链）从未在本机跑过——
+            //   旧代码 31..32 的门槛让 Android 16 一直没触发。单一 blur 是平台标准路径，
+            //   vivo 上大量 app 的模糊正常，最坏情况也只是「不糊」，绝不会黑。
+            // - 镜像路线已永久弃用，整层模糊 = 本机唯一可用的真背景模糊，
+            //   顺带把树丛边界糊软（解决 v10.164 清透版的「锐利框」问题）。
             .then(
-                if (blocked && android.os.Build.VERSION.SDK_INT in 31..32)
+                if (blocked && android.os.Build.VERSION.SDK_INT >= 31)
                     Modifier.blur(22.dp) else Modifier
             )
     ) {
