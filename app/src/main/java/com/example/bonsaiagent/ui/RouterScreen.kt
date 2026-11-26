@@ -70,19 +70,9 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
                     Size(it.size.width.toFloat(), it.size.height.toFloat())
                 )
             }
-            // v10.167：气泡出现时整层背景模糊（iOS 弹层/通知中心同款），API 31+ 全开。
-            // 调研结论（详见 00_交接说明 v10.167 节）：
-            // - Apple 液态玻璃的地基是「背后内容实时模糊」，边缘折射只是加分项；
-            // - 本机所有含 AGSL RuntimeShader 的镜像管线都渲染黑层（v10.161/163/165 实证），
-            //   而纯 Modifier.blur（单一 RenderEffect，无 shader、无链）从未在本机跑过——
-            //   旧代码 31..32 的门槛让 Android 16 一直没触发。单一 blur 是平台标准路径，
-            //   vivo 上大量 app 的模糊正常，最坏情况也只是「不糊」，绝不会黑。
-            // - 镜像路线已永久弃用，整层模糊 = 本机唯一可用的真背景模糊，
-            //   顺带把树丛边界糊软（解决 v10.164 清透版的「锐利框」问题）。
-            .then(
-                if (blocked && android.os.Build.VERSION.SDK_INT >= 31)
-                    Modifier.blur(22.dp) else Modifier
-            )
+            // v10.168：撤掉整层模糊（用户反馈：整屏糊很奇怪，且消息气泡糊成
+            // 屏幕中间一团暗影）。「只糊卡片后面」改由 LiquidGlassBubble 内的
+            // 局部背板实现（真实背景裁剪副本 + 纯 Modifier.blur，见该文件 1a 层）。
     ) {
     RouterChatBody(vm, listState)
     }
@@ -258,7 +248,8 @@ private fun GlassQuotaBubble(
     val scrim = if (darkBg)
         Brush.verticalGradient(listOf(Color(0x47000000), Color(0x00000000)))
     else
-        Brush.verticalGradient(listOf(Color(0x80FFFFFF), Color(0x00FFFFFF)))
+        // v10.168：50%→30%，背景已有局部模糊，浅衬只做轻微托底，减少「贴片感」
+        Brush.verticalGradient(listOf(Color(0x4DFFFFFF), Color(0x00FFFFFF)))
 
     // 整卡按压：缩一点 + 弹簧回弹（iOS「按下有回应」的轻量版）
     var pressed by remember { mutableStateOf(false) }

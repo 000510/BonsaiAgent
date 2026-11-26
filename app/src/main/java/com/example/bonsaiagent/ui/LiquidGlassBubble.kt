@@ -4,12 +4,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -18,6 +26,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
@@ -40,7 +51,12 @@ import com.example.bonsaiagent.data.AgentSettings
  *     1) 细白边框 1dp 85% + 顶部内侧高光弧 + 底部暗边 + 定向菲涅尔左缘光 + 红蓝色散细晕
  *   这是 Apple「Clear」变体液态玻璃的做法：透明体 + 精致的边缘。
  *
- * v10.166：镜像管线永久弃用（v10.165 与 v10.161 管线完全一致仍渲染黑层，
+ * v10.168：卡内局部背板 —— 整层模糊（v10.167）改回「只糊卡片后面」：
+ *   卡片内放一份真实背景的裁剪副本（bgFrame/cardOrigin 对位，已验证正确），
+ *   对副本用**纯 Modifier.blur（单一 RenderEffect，本机 v10.167 实测可跑）**，
+ *   不碰 AGSL/链（本机死路）。屏幕其余部分保持清晰。
+ *   失败模式安全：blur 失效 → 退回 v10.164 清透形态（颜色仍正确），不会黑。
+ * 历史：v10.166：镜像管线永久弃用（v10.165 与 v10.161 管线完全一致仍渲染黑层，
  * 实证该设备 RenderEffect 镜像不可用）。本版 = v10.164 清透玻璃 +
  * 深背景档改为「深色玻璃+白字」40/34%。
  * 历史：v10.165 曾恢复「镜像 + blur」两层管线（v10.161 已验证能渲染出模糊背景；
@@ -85,7 +101,9 @@ fun LiquidGlassCard(
         else -> Color(0x40E3EAFF)        // 白 25%
     }
 
-    Box(modifier) {
+    var cardOrigin by remember { mutableStateOf(Offset.Zero) }
+
+    Box(modifier.onGloballyPositioned { cardOrigin = it.positionInWindow() }) {
         // ---- 0) 手动环形投影：只存在于卡片轮廓"外侧"，向外出 7 环递减淡出 ----
         Box(
             Modifier
@@ -108,8 +126,27 @@ fun LiquidGlassCard(
                 }
         )
 
-        // ---- 1) 玻璃体：镜像模糊层 + 薄 tint 渐变 + 边缘质感 + 细白边 ----
+        // ---- 1) 玻璃体：局部背板（糊）+ 薄 tint 渐变 + 边缘质感 + 细白边 ----
         Box(Modifier.matchParentSize().clip(shape)) {
+            // 1a) 卡内局部背板：真实背景的裁剪副本 + 纯 blur（无 shader、无链）
+            if (backdropSettings != null && backdropSize != IntSize.Zero) {
+                val dpx = with(density) { backdropSize.width.toDp() }
+                val dpy = with(density) { backdropSize.height.toDp() }
+                Box(Modifier.matchParentSize().clipToBounds()) {
+                    Box(
+                        Modifier
+                            .size(dpx, dpy)
+                            .graphicsLayer {
+                                translationX = backdropOrigin.x - cardOrigin.x
+                                translationY = backdropOrigin.y - cardOrigin.y
+                            }
+                            .blur(14.dp)
+                    ) {
+                        // 副本用小尺寸解码（maxSide=560）防 OOM
+                        AppBackground(backdropSettings, Modifier.fillMaxSize(), maxSide = 560)
+                    }
+                }
+            }
             // 1b) 薄 tint 渐变 + 边缘质感
             Box(
                 Modifier
