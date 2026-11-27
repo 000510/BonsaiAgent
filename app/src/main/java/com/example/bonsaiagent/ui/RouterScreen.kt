@@ -1,7 +1,6 @@
 package com.example.bonsaiagent.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -18,7 +17,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,25 +24,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.bonsaiagent.ChatMessage
 import com.example.bonsaiagent.MainViewModel
-import com.example.bonsaiagent.agent.CloudSearch
 
 @Composable
 fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
@@ -57,19 +46,10 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     // 这里用本地 state 直接叠加，不碰 vm.quotaBlocked 的真实逻辑（不影响切站/重试）。
     var debugBubble by remember { mutableStateOf(false) }
     val blocked = vm.quotaBlocked.value || debugBubble
-    // v10.158：背景层（AppBackground + 对话）在窗口里的位置/尺寸。
-    // 玻璃卡片靠它把背景「镜像」进卡片内部做真折射 —— 不需要全屏折射层，
-    // 也不需要任何坐标换算（卡片与镜像都在卡内，天然对齐）。
-    val bgFrame = remember { mutableStateOf(Rect.Zero) }
+
     Box(
         Modifier
             .matchParentSize()
-            .onGloballyPositioned {
-                bgFrame.value = Rect(
-                    it.positionInWindow(),
-                    Size(it.size.width.toFloat(), it.size.height.toFloat())
-                )
-            }
             // v10.168：撤掉整层模糊（用户反馈：整屏糊很奇怪，且消息气泡糊成
             // 屏幕中间一团暗影）。「只糊卡片后面」改由 LiquidGlassBubble 内的
             // 局部背板实现（真实背景裁剪副本 + 纯 Modifier.blur，见该文件 1a 层）。
@@ -141,12 +121,7 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     if (blocked) {
         GlassQuotaBubble(
             vm = vm,
-            modifier = Modifier.align(Alignment.BottomCenter),
-            backdropOrigin = bgFrame.value.topLeft,
-            backdropSize = IntSize(
-                bgFrame.value.width.toInt().coerceAtLeast(1),
-                bgFrame.value.height.toInt().coerceAtLeast(1)
-            )
+            modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
 
@@ -221,35 +196,14 @@ private fun RouterChatBody(vm: MainViewModel, listState: LazyListState) {
 @Composable
 private fun GlassQuotaBubble(
     vm: MainViewModel,
-    modifier: Modifier = Modifier,
-    backdropOrigin: Offset = Offset.Zero,
-    backdropSize: IntSize = IntSize.Zero
+    modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    // v10.158：按背景亮度自动配色（纯色/图片都适用）
+    // v10.172：回滚 v10.157 玻璃观感 —— 固定白磨砂卡（40/32/25%）任何背景下
+    // 深字都清楚，撤掉自适应配色与标题底衬（这些是 158+ 背景副本路线的配套，
+    // 该路线已按用户要求整体回滚）。settings 保留给列表使用。
     val settings = vm.settings.value
-    val luma = rememberBackgroundLuma(settings)
-    // v10.162：文字配色门槛 0.55 → 0.35，与 deepBg 同步。
-    // 白玻璃档（图片 58/50/42%）下卡片有效亮度 ≈ bgLuma*0.5+0.5，
-    // bgLuma≥0.35 时 ≥0.68，深字足够清楚；只有真深背景才切白字。
-    val darkBg = luma < 0.35f
-    val useImageBg = settings.bgType == "image"
-
-    val titleColor = if (darkBg) Color(0xFFF4F7FC) else Color(0xFF3A4048)
-    val subColor = if (darkBg) Color(0xCCE9EEF8) else Color(0xFF5E656E)
-    val titleShadow = if (darkBg) Color(0x99000000) else Color(0x8CFFFFFF)
-    val subShadow = if (darkBg) Color(0x77000000) else Color(0x66FFFFFF)
-    val itemColor = if (darkBg) Color(0xFFF4F7FC) else Color(0xFF111111)
-    // 标题区底衬：深字配白色 scrim；白字配深色 scrim
-    // v10.162：深背景档磨砂提到 22%，scrim 维持 28% 平衡可读性
-    // v10.162：磨砂压薄后标题底衬同步压轻（60%→50% 白），避免显出一道白带；
-    // 深字本身的白色描影负责可读性
-    val scrim = if (darkBg)
-        Brush.verticalGradient(listOf(Color(0x47000000), Color(0x00000000)))
-    else
-        // v10.168：50%→30%，背景已有局部模糊，浅衬只做轻微托底，减少「贴片感」
-        Brush.verticalGradient(listOf(Color(0x4DFFFFFF), Color(0x00FFFFFF)))
 
     // 整卡按压：缩一点 + 弹簧回弹（iOS「按下有回应」的轻量版）
     var pressed by remember { mutableStateOf(false) }
@@ -282,19 +236,12 @@ private fun GlassQuotaBubble(
                     pressed = false
                 }
             },
-        backdropSettings = settings,
-        backdropOrigin = backdropOrigin,
-        backdropSize = backdropSize,
-        bgLuma = luma,
-        frostBoost = useImageBg
+
     ) {
         Column(Modifier.fillMaxWidth()) {
-            // ---- 标题行（带底衬，保证任何背景下文字都清楚）----
+            // ---- 标题行 ----
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(scrim)
-                    .padding(horizontal = 4.dp, vertical = 3.dp),
+                Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("⚠️", fontSize = 16.sp)
@@ -304,11 +251,11 @@ private fun GlassQuotaBubble(
                         "云端调用失败，请切换中转站",
                         fontSize = 14.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = titleColor,
+                        color = Color(0xFF3A4048),
                         letterSpacing = 0.2.sp,
                         style = androidx.compose.ui.text.TextStyle(
                             shadow = androidx.compose.ui.graphics.Shadow(
-                                color = titleShadow,
+                                color = Color(0x8CFFFFFF),
                                 offset = androidx.compose.ui.geometry.Offset(0f, 1.2f),
                                 blurRadius = 1.6f
                             )
@@ -319,10 +266,10 @@ private fun GlassQuotaBubble(
                         if (err.isNotBlank()) err.take(90) else "点下面任一站，自动继续刚才的任务",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
-                        color = subColor,
+                        color = Color(0xFF5E656E),
                         style = androidx.compose.ui.text.TextStyle(
                             shadow = androidx.compose.ui.graphics.Shadow(
-                                color = subShadow,
+                                color = Color(0x66FFFFFF),
                                 offset = androidx.compose.ui.geometry.Offset(0f, 1f),
                                 blurRadius = 1.2f
                             )
@@ -376,18 +323,17 @@ private fun GlassQuotaBubble(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
-                                // v10.164：清透玻璃下给每行加白色胶囊底（非当前站 20% 白），
-                                // 保证深字在深色壁纸区域也可读；当前站用品牌蓝 12%
+
                                 .background(
-                                    if (isCur) Color(0xFF4D6BFE).copy(alpha = 0.12f)
-                                    else Color.White.copy(alpha = 0.20f)
+                                    if (isCur) Color(0xFF4D6BFE).copy(alpha = 0.10f)
+                                    else Color.Transparent
                                 )
                                 .clickable { if (!isCur && hasKey) vm.retryCloudWith(p.id) }
                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(p.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                                color = if (isCur) Color(0xFF4D6BFE) else itemColor)
+                                color = if (isCur) Color(0xFF4D6BFE) else Color(0xFF111111))
                             Spacer(Modifier.weight(1f))
                             val tip = when {
                                 isCur -> "当前站"
