@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
@@ -26,14 +27,15 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.bonsaiagent.data.AgentSettings
+import kotlin.math.roundToInt
 
 /**
  * v10.164：液态玻璃卡片（清透版，整卡重写）。
@@ -56,6 +58,8 @@ import com.example.bonsaiagent.data.AgentSettings
  *   对副本用**纯 Modifier.blur（单一 RenderEffect，本机 v10.167 实测可跑）**，
  *   不碰 AGSL/链（本机死路）。屏幕其余部分保持清晰。
  *   失败模式安全：blur 失效 → 退回 v10.164 清透形态（颜色仍正确），不会黑。
+ * v10.170：图片/深背景 tint 抬高（42/36% / 45/38%）—— 深色内容经局部模糊
+ *   后透出为暗块，薄 tint 压不住。
  * 历史：v10.166：镜像管线永久弃用（v10.165 与 v10.161 管线完全一致仍渲染黑层，
  * 实证该设备 RenderEffect 镜像不可用）。本版 = v10.164 清透玻璃 +
  * 深背景档改为「深色玻璃+白字」40/34%。
@@ -89,16 +93,19 @@ fun LiquidGlassCard(
     // v10.166：深背景策略改为「深色玻璃 + 白字」（iOS 深色环境同款）：
     // 白 tint 提到 40/34% 把卡片抬成中灰，RouterScreen darkBg(<0.35) 切白字。
     // 不再尝试镜像模糊——该设备 RenderEffect 镜像管线复现性渲染黑层，永久弃用。
+    // v10.170：局部模糊后深色内容（树丛）透出为柔和暗块，tint 太薄压不住
+    // （"中间黑一块"）。图片档 30/24% → 42/36%，深档同步抬高；
+    // 有模糊纹理垫底，白度提高不会退化成 v10.167 那种"灰蒙贴片"。
     val deepBg = bgLuma < 0.35f
     val tintTop = when {
-        deepBg -> Color(0x66FFFFFF)      // 白 40%
-        frostBoost -> Color(0x4DFFFFFF)  // 白 30%
-        else -> Color(0x59FFFFFF)        // 白 35%
+        deepBg -> Color(0x73FFFFFF)      // 白 45%
+        frostBoost -> Color(0x6BFFFFFF)  // 白 42%
+        else -> Color(0x66FFFFFF)        // 白 40%
     }
     val tintBot = when {
-        deepBg -> Color(0x57FFFFFF)      // 白 34%
-        frostBoost -> Color(0x3DE6EDFF)  // 白 24%
-        else -> Color(0x40E3EAFF)        // 白 25%
+        deepBg -> Color(0x61FFFFFF)      // 白 38%
+        frostBoost -> Color(0x5CE6EDFF)  // 白 36%
+        else -> Color(0x59FFFFFF)        // 白 35%
     }
 
     var cardOrigin by remember { mutableStateOf(Offset.Zero) }
@@ -128,19 +135,26 @@ fun LiquidGlassCard(
 
         // ---- 1) 玻璃体：局部背板（糊）+ 薄 tint 渐变 + 边缘质感 + 细白边 ----
         Box(Modifier.matchParentSize().clip(shape)) {
-            // 1a) 卡内局部背板：真实背景的裁剪副本 + 纯 blur（无 shader、无链）
+            // 1a) 卡内局部背板：真实背景的裁剪副本 + 纯 blur（无 shader、无链）。
+            // v10.169：blur 从「全屏副本节点」挪到外层裁剪盒 —— blur 的 layer 尺寸
+            // = 卡片自身尺寸。v10.168 把 blur 挂在全屏副本+graphicsLayer 平移上，
+            // 实测糊区只覆盖卡片上半（全屏大 layer + 效果在本机不可靠，同 shader 黑层
+            // 一类的问题）。offset 纯位移不建 layer；graphicsLayer 平移弃用。
             if (backdropSettings != null && backdropSize != IntSize.Zero) {
                 val dpx = with(density) { backdropSize.width.toDp() }
                 val dpy = with(density) { backdropSize.height.toDp() }
-                Box(Modifier.matchParentSize().clipToBounds()) {
+                val ox = (backdropOrigin.x - cardOrigin.x).roundToInt()
+                val oy = (backdropOrigin.y - cardOrigin.y).roundToInt()
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .clipToBounds()
+                        .blur(14.dp)
+                ) {
                     Box(
                         Modifier
                             .size(dpx, dpy)
-                            .graphicsLayer {
-                                translationX = backdropOrigin.x - cardOrigin.x
-                                translationY = backdropOrigin.y - cardOrigin.y
-                            }
-                            .blur(14.dp)
+                            .offset { IntOffset(-ox, -oy) }
                     ) {
                         // 副本用小尺寸解码（maxSide=560）防 OOM
                         AppBackground(backdropSettings, Modifier.fillMaxSize(), maxSide = 560)
