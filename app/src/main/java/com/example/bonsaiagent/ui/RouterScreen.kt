@@ -27,13 +27,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bonsaiagent.MainViewModel
+import com.example.bonsaiagent.data.AgentSettings
 
 @Composable
 fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
@@ -46,13 +50,20 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     // 这里用本地 state 直接叠加，不碰 vm.quotaBlocked 的真实逻辑（不影响切站/重试）。
     var debugBubble by remember { mutableStateOf(false) }
     val blocked = vm.quotaBlocked.value || debugBubble
+    // v10.173：背景层在窗口中的位置/尺寸（糊化背板的定位基准）
+    // v10.174：玻璃卡糊化背板要用设置（壁纸路径）—— GLM 包漏了这行，导致调用处 settings 未定义
+    val settings = vm.settings.value
+    val bgFrame = remember { mutableStateOf(Rect.Zero) }
 
     Box(
         Modifier
             .matchParentSize()
-            // v10.168：撤掉整层模糊（用户反馈：整屏糊很奇怪，且消息气泡糊成
-            // 屏幕中间一团暗影）。「只糊卡片后面」改由 LiquidGlassBubble 内的
-            // 局部背板实现（真实背景裁剪副本 + 纯 Modifier.blur，见该文件 1a 层）。
+            .onGloballyPositioned {
+                bgFrame.value = Rect(
+                    it.positionInWindow(),
+                    Size(it.size.width.toFloat(), it.size.height.toFloat())
+                )
+            }
     ) {
     RouterChatBody(vm, listState)
     }
@@ -121,7 +132,13 @@ fun RouterScreen(vm: MainViewModel, onBackToChat: () -> Unit) {
     if (blocked) {
         GlassQuotaBubble(
             vm = vm,
-            modifier = Modifier.align(Alignment.BottomCenter)
+            modifier = Modifier.align(Alignment.BottomCenter),
+            backdropSettings = settings,
+            bgOrigin = bgFrame.value.topLeft,
+            bgSize = IntSize(
+                bgFrame.value.width.toInt().coerceAtLeast(1),
+                bgFrame.value.height.toInt().coerceAtLeast(1)
+            )
         )
     }
 
@@ -196,7 +213,11 @@ private fun RouterChatBody(vm: MainViewModel, listState: LazyListState) {
 @Composable
 private fun GlassQuotaBubble(
     vm: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // v10.174：玻璃卡糊化背板需要「背景原点 + 尺寸」，用来把壁纸按卡片位置裁剪
+    backdropSettings: AgentSettings? = null,
+    bgOrigin: Offset = Offset.Zero,
+    bgSize: IntSize = IntSize.Zero
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -236,7 +257,10 @@ private fun GlassQuotaBubble(
                     pressed = false
                 }
             },
-
+        // v10.174：把糊化背板参数真正接到卡片上（GLM 包漏了这三行，糊化层永远不会画）
+        backdropSettings = backdropSettings,
+        bgOrigin = bgOrigin,
+        bgSize = bgSize
     ) {
         Column(Modifier.fillMaxWidth()) {
             // ---- 标题行 ----
