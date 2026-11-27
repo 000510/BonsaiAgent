@@ -1,24 +1,19 @@
 package com.example.bonsaiagent.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -27,15 +22,15 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import android.graphics.Bitmap
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
 import com.example.bonsaiagent.data.AgentSettings
-import kotlin.math.roundToInt
 
 /**
  * v10.164：液态玻璃卡片（清透版，整卡重写）。
@@ -60,6 +55,8 @@ import kotlin.math.roundToInt
  *   失败模式安全：blur 失效 → 退回 v10.164 清透形态（颜色仍正确），不会黑。
  * v10.170：图片/深背景 tint 抬高（42/36% / 45/38%）—— 深色内容经局部模糊
  *   后透出为暗块，薄 tint 压不住。
+ * v10.171：局部背板改为纯 CPU 糊位图（迭代减半采样）—— 本机 RenderEffect
+ *   blur 在嵌套结构中静默失效，GPU 效果管线彻底弃用。糊度恒定、任何设备可跑。
  * 历史：v10.166：镜像管线永久弃用（v10.165 与 v10.161 管线完全一致仍渲染黑层，
  * 实证该设备 RenderEffect 镜像不可用）。本版 = v10.164 清透玻璃 +
  * 深背景档改为「深色玻璃+白字」40/34%。
@@ -108,9 +105,7 @@ fun LiquidGlassCard(
         else -> Color(0x59FFFFFF)        // 白 35%
     }
 
-    var cardOrigin by remember { mutableStateOf(Offset.Zero) }
-
-    Box(modifier.onGloballyPositioned { cardOrigin = it.positionInWindow() }) {
+    Box(modifier) {
         // ---- 0) 手动环形投影：只存在于卡片轮廓"外侧"，向外出 7 环递减淡出 ----
         Box(
             Modifier
@@ -135,31 +130,15 @@ fun LiquidGlassCard(
 
         // ---- 1) 玻璃体：局部背板（糊）+ 薄 tint 渐变 + 边缘质感 + 细白边 ----
         Box(Modifier.matchParentSize().clip(shape)) {
-            // 1a) 卡内局部背板：真实背景的裁剪副本 + 纯 blur（无 shader、无链）。
-            // v10.169：blur 从「全屏副本节点」挪到外层裁剪盒 —— blur 的 layer 尺寸
-            // = 卡片自身尺寸。v10.168 把 blur 挂在全屏副本+graphicsLayer 平移上，
-            // 实测糊区只覆盖卡片上半（全屏大 layer + 效果在本机不可靠，同 shader 黑层
-            // 一类的问题）。offset 纯位移不建 layer；graphicsLayer 平移弃用。
-            if (backdropSettings != null && backdropSize != IntSize.Zero) {
-                val dpx = with(density) { backdropSize.width.toDp() }
-                val dpy = with(density) { backdropSize.height.toDp() }
-                val ox = (backdropOrigin.x - cardOrigin.x).roundToInt()
-                val oy = (backdropOrigin.y - cardOrigin.y).roundToInt()
-                Box(
-                    Modifier
-                        .matchParentSize()
-                        .clipToBounds()
-                        .blur(14.dp)
-                ) {
-                    Box(
-                        Modifier
-                            .size(dpx, dpy)
-                            .offset { IntOffset(-ox, -oy) }
-                    ) {
-                        // 副本用小尺寸解码（maxSide=560）防 OOM
-                        AppBackground(backdropSettings, Modifier.fillMaxSize(), maxSide = 560)
-                    }
-                }
+            // 1a) 卡内局部背板 v10.171：**纯 CPU 糊位图**（迭代减半采样）。
+            // 本机红线再+1：blur（RenderEffect）只有「直接挂全屏静态 Box」能跑，
+            // 放进任何嵌套/裁剪/位移结构都**静默失效**（v10.168 只糊一半、
+            // v10.169/170 完全不糊）。彻底放弃 GPU 效果管线：
+            // 壁纸解码 maxSide=480 → 反复减半到宽≤30px（等价强高斯糊，纯 CPU
+            // 毫秒级）→ Image 双线性放大铺满卡片。零 RenderEffect、零 graphicsLayer、
+            // 零裁剪对位，糊度恒定均匀，任何设备都能跑。
+            if (backdropSettings != null) {
+                BlurredBackdrop(backdropSettings, Modifier.fillMaxSize())
             }
             // 1b) 薄 tint 渐变 + 边缘质感
             Box(
@@ -224,5 +203,47 @@ fun LiquidGlassCard(
 
         // ---- 2) 内容层 ----
         Box(Modifier.fillMaxWidth().padding(pad), content = content)
+    }
+}
+
+
+/**
+ * v10.171：卡片内的糊化背板。纯 CPU 制作糊位图，零 GPU 效果：
+ * - image：decodeWallpaper(480) → 迭代减半到宽 ≤30px（每次 createScaledBitmap
+ *   filter=true 做面积平均）→ Image 以 FilterQuality.High 双线性放大铺满卡片；
+ *   放大倍率大，天然就是柔和的磨砂效果，糊度只由最终宽度（30px）决定，恒定均匀。
+ * - color / 默认：直接铺纯色（纯色无需模糊）。
+ * 同步解码+缩放只在小图上做（480px 起步，毫秒级），remember 缓存，切图才重算。
+ */
+@Composable
+private fun BlurredBackdrop(s: AgentSettings, modifier: Modifier = Modifier) {
+    when (s.bgType) {
+        "image" -> {
+            val path = s.bgImagePath
+            val bmp = remember(path) {
+                decodeWallpaper(path, 480)?.let { src ->
+                    var b = src
+                    while (b.width > 30) {
+                        val w = (b.width / 2).coerceAtLeast(8)
+                        val h = (b.height / 2).coerceAtLeast(8)
+                        b = Bitmap.createScaledBitmap(b, w, h, true)
+                    }
+                    b
+                }
+            }
+            if (bmp != null) {
+                Image(
+                    bitmap = bmp.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    filterQuality = FilterQuality.High
+                )
+            } else {
+                Box(modifier.fillMaxSize().background(Color(0xFFF7F8FC)))
+            }
+        }
+        "color" -> Box(modifier.fillMaxSize().background(Color(s.bgColor)))
+        else -> Box(modifier.fillMaxSize().background(Color(0xFFF7F8FC)))
     }
 }

@@ -104,7 +104,8 @@ private data class Blob(val cx: Float, val cy: Float, val r: Float, val color: C
 
 /** 降采样解码壁纸（手机照片动辄 4000px，直接解码会吃光内存）。maxSide：
  *  主背景用 1440；玻璃卡片的镜像层用更小的值（只占卡片大小，避免双份大图 OOM） */
-private fun decodeWallpaper(path: String, maxSide: Int = 1440) = runCatching {
+// v10.171：原来的 private 改 internal —— 玻璃卡片的 CPU 糊化副本要用同一个解码器。
+internal fun decodeWallpaper(path: String, maxSide: Int = 1440) = runCatching {
     if (path.isBlank()) return@runCatching null
     val f = File(path)
     if (!f.exists() || f.length() <= 0L) return@runCatching null
