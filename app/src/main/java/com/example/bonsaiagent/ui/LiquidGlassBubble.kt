@@ -220,10 +220,12 @@ private fun BlurredBackdrop(
     bgSize: IntSize
 ) {
     val path = s.bgImagePath
-    val fx = (cardPos.x / bgSize.width).coerceIn(0f, 1f)
-    val fy = (cardPos.y / bgSize.height).coerceIn(0f, 1f)
-    val fw = (cardSize.width / bgSize.width).coerceIn(0f, 1f)
-    val fh = (cardSize.height / bgSize.height).coerceIn(0f, 1f)
+    // 注意：cardSize/bgSize 都是 IntSize，必须先 toFloat 再除，否则 Int/Int 得到 Int，
+    // 后面 coerceIn(0f,1f) 会报 "floating-point literal does not conform to Int"（GLM 原包就是这错）
+    val fx = (cardPos.x / bgSize.width.toFloat()).coerceIn(0f, 1f)
+    val fy = (cardPos.y / bgSize.height.toFloat()).coerceIn(0f, 1f)
+    val fw = (cardSize.width.toFloat() / bgSize.width.toFloat()).coerceIn(0f, 1f)
+    val fh = (cardSize.height.toFloat() / bgSize.height.toFloat()).coerceIn(0f, 1f)
     val keyFx = (fx * 200).roundToInt()
     val keyFy = (fy * 200).roundToInt()
     val keyFw = (fw * 200).roundToInt()
